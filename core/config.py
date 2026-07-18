@@ -1,0 +1,84 @@
+"""настройки проекта."""
+
+from pathlib import Path
+import os
+
+try:
+    from dotenv import load_dotenv
+# заглушка для запуска без pydantic
+except ImportError:
+    def load_dotenv(*_args, **_kwargs):
+        return False
+
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
+
+
+def env_int(name: str, default: int) -> int:
+    """прочитать положительное число из .env или взять запасное."""
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
+# файлы и хранилища
+DATA_DIR = BASE_DIR / "data"
+UPLOAD_DIR = str(BASE_DIR / "uploads")
+CHATS_DB_PATH = str(DATA_DIR / "chats.db")
+CHROMA_DIR = str(DATA_DIR / "chroma")
+CHROMA_COLLECTION_NAME = "lecture_chunks"
+
+
+# форматы загрузки
+VIDEO_EXTENSIONS = {".mp4", ".ts", ".avi",
+                    ".mkv", ".mov", ".webm", ".flv", ".wmv"}
+AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac", ".wma"}
+ALLOWED_EXTENSIONS = VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
+
+
+# поиск rag и повторное ранжирование
+RETRIEVAL_TOP_K = 10
+DENSE_TOP_K_SUMMARY = 5
+DENSE_TOP_K_TRANSCRIPT = 7
+LEXICAL_TOP_K_SUMMARY = 5
+LEXICAL_TOP_K_TRANSCRIPT = 7
+RERANK_TOP_N_SUMMARY = 3
+RERANK_TOP_N_TRANSCRIPT = 4
+RRF_K = 60
+RERANKER_BATCH_SIZE = env_int("RERANKER_BATCH_SIZE", 4)
+
+
+# обработка длинных лекций по частям
+DIRECT_LLM_CHAR_LIMIT = 20_000
+MAP_CHUNK_CHARS = 14_000
+MAP_CHUNK_OVERLAP = 800
+
+
+# память чатов
+CHAT_RECENT_WINDOW = 8
+CHAT_SUMMARIZE_THRESHOLD = 12
+DEFAULT_CHAT_TITLE = "Новый чат"
+
+
+# выбор моделей openrouter и LLM
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+PRIMARY_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
+
+FALLBACK_MODELS = [
+    "qwen/qwen3-next-80b-a3b-instruct:free",
+    "google/gemma-4-31b-it:free",
+    "openai/gpt-oss-120b:free",
+]
+
+SUMMARIZATION_MODELS = [
+    "google/gemma-4-31b-it:free",
+    "qwen/qwen3-next-80b-a3b-instruct:free",
+    "openai/gpt-oss-20b:free",
+]
+TITLE_MODEL = "google/gemma-4-31b-it:free"
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+MAX_RETRIES = 10
+BACKOFF_BASE = 2.0
