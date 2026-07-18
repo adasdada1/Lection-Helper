@@ -180,7 +180,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     resetChatArea();
                 } else {
                     data.messages.forEach(msg => {
-                        const rendered = marked.parse(msg.content);
+                        const rendered = renderMarkdown(msg.content);
                         addMessage(
                             msg.role,
                             rendered,
@@ -252,6 +252,8 @@ document.addEventListener('DOMContentLoaded', () => {
         return d.innerHTML;
     };
 
+    const renderMarkdown = (text) => DOMPurify.sanitize(marked.parse(text ?? ""));
+
 
     const formatKindLabel = (kind) => {
         if (kind === 'summary') return 'Конспект';
@@ -287,7 +289,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return `
             <section class="material-section">
                 <h2>${escapeHtml(title)}</h2>
-                ${marked.parse(content)}
+                ${renderMarkdown(content)}
             </section>
         `;
     };
@@ -435,7 +437,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (res.ok) {
                 const data = await res.json();
-                const rendered = marked.parse(data.answer || '');
+                const rendered = renderMarkdown(data.answer || '');
                 addMessage('assistant', rendered, data.model || null, data.sources || []);
                 
                 // обновить заголовок, если он создан
@@ -547,12 +549,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 // показать чек-лист и конспект сразу после готовности
                 if (job.checklist && checklistCard.classList.contains('hidden')) {
                     checklistCard.classList.remove('hidden');
-                    checklistContent.innerHTML = marked.parse(job.checklist);
+                    checklistContent.innerHTML = renderMarkdown(job.checklist);
                     applyMathRendering(checklistContent);
                 }
                 if (job.summary && summaryCard.classList.contains('hidden')) {
                     summaryCard.classList.remove('hidden');
-                    summaryContent.innerHTML = marked.parse(job.summary);
+                    summaryContent.innerHTML = renderMarkdown(job.summary);
                     applyMathRendering(summaryContent);
                 }
 
