@@ -65,18 +65,19 @@ DEFAULT_CHAT_TITLE = "Новый чат"
 # выбор моделей openrouter и LLM
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-PRIMARY_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
+PRIMARY_MODEL = "minimax/minimax-m3:free"
 
 FALLBACK_MODELS = [
-    "qwen/qwen3-next-80b-a3b-instruct:free",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "z-ai/glm-5.2:free",
     "google/gemma-4-31b-it:free",
     "openai/gpt-oss-120b:free",
 ]
 
 SUMMARIZATION_MODELS = [
     "google/gemma-4-31b-it:free",
-    "qwen/qwen3-next-80b-a3b-instruct:free",
     "openai/gpt-oss-20b:free",
+    "qwen/qwen3-next-80b-a3b-instruct:free",
 ]
 TITLE_MODEL = "google/gemma-4-31b-it:free"
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}

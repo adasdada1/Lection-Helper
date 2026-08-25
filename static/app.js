@@ -6,7 +6,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const sidebarBackdrop = document.getElementById('sidebar-backdrop');
 
     // вкладки
-    const tabBtns     = document.querySelectorAll('.tab-btn');
+    const tabBtns     = document.querySelectorAll('.tab');
     const tabChat     = document.getElementById('tab-chat');
     const tabUpload   = document.getElementById('tab-upload');
 
@@ -106,22 +106,22 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderChatList() {
         chatList.innerHTML = '';
         if (chatsData.length === 0) {
-            chatList.innerHTML = '<div style="padding: 0.5rem; color: var(--text-muted); font-size: 0.85rem">Нет диалогов</div>';
+            chatList.innerHTML = '<div class="sidebar__empty">Нет диалогов</div>';
             return;
         }
 
         chatsData.forEach(chat => {
             const item = document.createElement('div');
-            item.className = `chat-item ${chat.chat_id === currentChatId ? 'active' : ''}`;
+            item.className = `dialog ${chat.chat_id === currentChatId ? 'dialog--active' : ''}`;
             
             const title = document.createElement('div');
-            title.className = 'chat-item-title';
+            title.className = 'dialog__title';
             title.textContent = chat.title || 'Новый чат';
             item.appendChild(title);
 
             const delBtn = document.createElement('button');
-            delBtn.className = 'btn-delete-chat';
-            delBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>';
+            delBtn.className = 'dialog__delete';
+            delBtn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>';
             delBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 deleteChat(chat.chat_id);
@@ -169,7 +169,7 @@ document.addEventListener('DOMContentLoaded', () => {
         currentChatId = id;
         closeMobileSidebar();
         renderChatList(); // обновить активный класс
-        chatArea.innerHTML = '<div class="loading-dots" style="margin: auto"><span></span><span></span><span></span></div>';
+        chatArea.innerHTML = '<div class="dots dots--center"><span class="dots__item"></span><span class="dots__item"></span><span class="dots__item"></span></div>';
         
         try {
             const res = await fetch(`/api/chats/${id}/messages`);
@@ -198,9 +198,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function resetChatArea() {
         chatArea.innerHTML = `
-            <div class="welcome-message" id="welcome">
-                <h1>Добро пожаловать!</h1>
-                <p>Задавайте вопросы по загруженным лекционным материалам. Ответы основаны на содержании ваших лекций.</p>
+            <div class="welcome" id="welcome">
+                <h1 class="welcome__title">Добро пожаловать!</h1>
+                <p class="welcome__text">Задавайте вопросы по загруженным лекционным материалам. Ответы основаны на содержании ваших лекций.</p>
             </div>
         `;
     }
@@ -217,8 +217,8 @@ document.addEventListener('DOMContentLoaded', () => {
     tabBtns.forEach(btn => {
         btn.addEventListener('click', () => {
             const target = btn.dataset.tab;
-            tabBtns.forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
+            tabBtns.forEach(b => b.classList.remove('tab--active'));
+            btn.classList.add('tab--active');
             Object.values(tabs).forEach(t => t.classList.add('hidden'));
             tabs[target].classList.remove('hidden');
             mobileDialogsToggle.classList.toggle('hidden', target !== 'chat');
@@ -287,8 +287,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const renderMaterialSection = (title, content) => {
         if (!content || !content.trim()) return '';
         return `
-            <section class="material-section">
-                <h2>${escapeHtml(title)}</h2>
+            <section class="material">
+                <h2 class="material__title">${escapeHtml(title)}</h2>
                 ${renderMarkdown(content)}
             </section>
         `;
@@ -313,16 +313,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (welcome) welcome.remove();
 
         const msg = document.createElement('div');
-        msg.className = `message ${role}`;
+        msg.className = `message message--${role}`;
 
         const bubble = document.createElement('div');
-        bubble.className = 'bubble';
+        bubble.className = 'message__bubble prose';
         bubble.innerHTML = html;
         msg.appendChild(bubble);
 
         if (role === 'assistant' && modelName) {
             const badge = document.createElement('span');
-            badge.className = 'model-badge';
+            badge.className = 'message__model';
             badge.textContent = `Ответ от: ${modelName}`;
             msg.appendChild(badge);
         }
@@ -330,26 +330,26 @@ document.addEventListener('DOMContentLoaded', () => {
         if (role === 'assistant' && sources.length > 0) {
             const toggle = document.createElement('button');
             toggle.type = 'button';
-            toggle.className = 'sources-toggle';
+            toggle.className = 'message__sources';
             toggle.textContent = `Источники: ${sources.length}`;
 
             const list = document.createElement('div');
-            list.className = 'sources-list hidden';
+            list.className = 'message__sources-list hidden';
 
             sortSourcesByRelevance(sources).forEach(s => {
                 const item = document.createElement('div');
-                item.className = 'source-item';
+                item.className = 'source';
 
                 const header = document.createElement('div');
-                header.className = 'source-header';
+                header.className = 'source__name';
                 header.textContent = s.filename || 'Без названия';
 
                 const meta = document.createElement('div');
-                meta.className = 'source-meta';
+                meta.className = 'source__meta';
                 meta.textContent = formatSourceMeta(s);
 
                 const preview = document.createElement('div');
-                preview.className = 'source-preview';
+                preview.className = 'source__preview';
                 preview.textContent = s.text_preview || '';
 
                 item.appendChild(header);
@@ -377,8 +377,8 @@ document.addEventListener('DOMContentLoaded', () => {
         msg.className = 'message assistant';
         msg.id = 'loading-msg';
         const bubble = document.createElement('div');
-        bubble.className = 'bubble';
-        bubble.innerHTML = '<div class="loading-dots"><span></span><span></span><span></span></div>';
+        bubble.className = 'message__bubble prose';
+        bubble.innerHTML = '<div class="dots"><span class="dots__item"></span><span class="dots__item"></span><span class="dots__item"></span></div>';
         msg.appendChild(bubble);
         chatArea.appendChild(msg);
         scrollToBottom();
@@ -451,11 +451,11 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 let detail = 'Произошла ошибка.';
                 try { const err = await res.json(); detail = err.detail || detail; } catch (_) {}
-                addMessage('assistant', `<span style="color:var(--error)">${escapeHtml(detail)}</span>`);
+                addMessage('assistant', `<span class="error-text">${escapeHtml(detail)}</span>`);
             }
         } catch (err) {
             removeLoading();
-            addMessage('assistant', '<span style="color:var(--error)">Ошибка сети. Убедитесь, что сервер запущен.</span>');
+            addMessage('assistant', '<span class="error-text">Ошибка сети. Убедитесь, что сервер запущен.</span>');
             console.error(err);
         }
     });
@@ -469,16 +469,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     dropZone.addEventListener('dragover', (e) => {
         e.preventDefault();
-        dropZone.classList.add('drag-over');
+        dropZone.classList.add('dropzone--active');
     });
 
     dropZone.addEventListener('dragleave', () => {
-        dropZone.classList.remove('drag-over');
+        dropZone.classList.remove('dropzone--active');
     });
 
     dropZone.addEventListener('drop', (e) => {
         e.preventDefault();
-        dropZone.classList.remove('drag-over');
+        dropZone.classList.remove('dropzone--active');
         if (e.dataTransfer.files.length > 0) uploadFile(e.dataTransfer.files[0]);
     });
 
@@ -492,10 +492,10 @@ document.addEventListener('DOMContentLoaded', () => {
         // показать ход обработки
         pipelineSection.classList.remove('hidden');
         pipelineFilename.textContent = file.name;
-        progressBar.style.width = '0%';
-        progressBar.className = 'progress-bar-fill';
+        progressBar.style.setProperty('--pipeline-progress', '0%');
+        progressBar.className = 'pipeline__bar';
         statusText.textContent = 'Загрузка файла…';
-        statusText.className = 'status-text';
+        statusText.className = 'pipeline__status';
         stageDetail.classList.add('hidden');
         stageDetail.textContent = '';
         checklistCard.classList.add('hidden');
@@ -511,9 +511,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 let detail = 'Ошибка загрузки';
                 try { const err = await res.json(); detail = err.detail || detail; } catch (_) {}
                 statusText.textContent = detail;
-                statusText.className = 'status-text error';
-                progressBar.className = 'progress-bar-fill error';
-                progressBar.style.width = '100%';
+                statusText.className = 'pipeline__status pipeline__status--error';
+                progressBar.className = 'pipeline__bar pipeline__bar--error';
+                progressBar.style.setProperty('--pipeline-progress', '100%');
                 return;
             }
 
@@ -522,7 +522,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         } catch (err) {
             statusText.textContent = 'Ошибка сети при загрузке';
-            statusText.className = 'status-text error';
+            statusText.className = 'pipeline__status pipeline__status--error';
             console.error(err);
         }
     }
@@ -535,7 +535,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 const job = await res.json();
 
-                progressBar.style.width = `${job.progress}%`;
+                progressBar.style.setProperty('--pipeline-progress', `${job.progress}%`);
                 statusText.textContent = job.stage;
 
                 if (job.transcription && job.transcription.total) {
@@ -559,8 +559,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 if (job.status === 'done') {
-                    progressBar.className = 'progress-bar-fill done';
-                    statusText.className = 'status-text done';
+                    progressBar.className = 'pipeline__bar pipeline__bar--done';
+                    statusText.className = 'pipeline__status pipeline__status--done';
                     statusText.textContent = `Готово. Проиндексировано ${job.chunk_count} фрагментов.`;
 
                     refreshDocuments();
@@ -568,9 +568,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 if (job.status === 'error') {
-                    progressBar.className = 'progress-bar-fill error';
-                    progressBar.style.width = '100%';
-                    statusText.className = 'status-text error';
+                    progressBar.className = 'pipeline__bar pipeline__bar--error';
+                    progressBar.style.setProperty('--pipeline-progress', '100%');
+                    statusText.className = 'pipeline__status pipeline__status--error';
                     statusText.textContent = `Ошибка: ${job.error}`;
                     return; // остановить проверку
                 }
@@ -595,31 +595,31 @@ document.addEventListener('DOMContentLoaded', () => {
             const { documents } = await res.json();
 
             if (documents.length === 0) {
-                docsList.innerHTML = '<p class="text-muted" id="docs-empty">Нет загруженных материалов</p>';
+                docsList.innerHTML = '<p class="note" id="docs-empty">Нет загруженных материалов</p>';
                 return;
             }
 
             docsList.innerHTML = '';
             documents.forEach(doc => {
                 const item = document.createElement('div');
-                item.className = 'doc-item';
+                item.className = 'doc';
                 item.innerHTML = `
-                    <div class="doc-info">
-                        <span class="doc-name">${escapeHtml(doc.filename)}</span>
-                        <span class="doc-meta">${doc.source_type} · ${doc.chunk_count} фрагментов · конспект</span>
+                    <div class="doc__info">
+                        <span class="doc__name">${escapeHtml(doc.filename)}</span>
+                        <span class="doc__meta">${doc.source_type} · ${doc.chunk_count} фрагментов · конспект</span>
                     </div>
                 `;
 
                 const actions = document.createElement('div');
-                actions.className = 'btn-actions';
+                actions.className = 'doc__actions';
 
                 const viewBtn = document.createElement('button');
-                viewBtn.className = 'btn-view';
+                viewBtn.className = 'doc__btn doc__btn--view';
                 viewBtn.textContent = 'Открыть материал';
                 viewBtn.addEventListener('click', () => viewDocument(doc.doc_id));
 
                 const delBtn = document.createElement('button');
-                delBtn.className = 'btn-delete';
+                delBtn.className = 'doc__btn doc__btn--delete';
                 delBtn.textContent = 'Удалить';
                 delBtn.addEventListener('click', () => deleteDocument(doc.doc_id, item));
 
@@ -637,7 +637,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function viewDocument(docId) {
         docModal.classList.remove('hidden');
         modalTitle.textContent = 'Материалы лекции';
-        modalBody.innerHTML = '<div class="loading-dots" style="margin: auto"><span></span><span></span><span></span></div>';
+        modalBody.innerHTML = '<div class="dots dots--center"><span class="dots__item"></span><span class="dots__item"></span><span class="dots__item"></span></div>';
 
         try {
             const res = await fetch(`/api/documents/${docId}`);
@@ -647,17 +647,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (doc) {
                     modalTitle.textContent = doc.filename || 'Материалы лекции';
                     const sections = renderMaterialSection('Конспект', doc.display_summary);
-                    modalBody.innerHTML = sections || '<p class="text-muted">Материалы пока пусты.</p>';
+                    modalBody.innerHTML = sections || '<p class="note">Материалы пока пусты.</p>';
                     applyMathRendering(modalBody);
                 } else {
-                    modalBody.innerHTML = '<p class="text-muted">Материалы не найдены.</p>';
+                    modalBody.innerHTML = '<p class="note">Материалы не найдены.</p>';
                 }
             } else {
-                modalBody.innerHTML = '<p style="color:var(--error)">Ошибка загрузки материалов.</p>';
+                modalBody.innerHTML = '<p class="error-text">Ошибка загрузки материалов.</p>';
             }
         } catch (e) {
             console.error('не удалось загрузить документ:', e);
-            modalBody.innerHTML = '<p style="color:var(--error)">Ошибка сети.</p>';
+            modalBody.innerHTML = '<p class="error-text">Ошибка сети.</p>';
         }
     }
 
@@ -670,7 +670,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 element.remove();
                 // проверить, остались ли документы
                 if (docsList.children.length === 0) {
-                    docsList.innerHTML = '<p class="text-muted">Нет загруженных материалов</p>';
+                    docsList.innerHTML = '<p class="note">Нет загруженных материалов</p>';
                 }
             }
         } catch (err) {
