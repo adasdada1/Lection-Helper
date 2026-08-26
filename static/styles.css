@@ -130,7 +130,7 @@ a:hover {
     margin-left: auto;
 }
 
-.header__burger {
+.icon-btn.header__burger {
     display: none;
 }
 
@@ -177,6 +177,200 @@ a:hover {
 
 .icon-btn:hover {
     background: #FFFFFF;
+    color: var(--primary);
+}
+
+.header__brand {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    color: #FFFFFF;
+}
+
+.header__course {
+    max-width: 320px;
+    font-size: 15px;
+    font-weight: 600;
+    color: #FFFFFF;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.courses {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    width: 100%;
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 20px 22px 28px;
+}
+
+.courses__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 14px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--divider);
+}
+
+.courses__title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--primary);
+}
+
+.courses__add {
+    padding: 9px 16px;
+    background: var(--primary);
+    border: none;
+    border-radius: var(--r-md);
+    color: #FFFFFF;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.16s ease;
+}
+
+.courses__add:hover {
+    background: var(--primary-hover);
+}
+
+.courses__list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(272px, 1fr));
+    gap: 12px;
+}
+
+.course {
+    position: relative;
+    padding: 20px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    cursor: pointer;
+    transition: background 0.16s ease, border-color 0.16s ease;
+}
+
+.course:hover {
+    background: var(--surface-hover);
+    border-color: var(--border-strong);
+}
+
+.course__title {
+    margin-bottom: 8px;
+    padding-right: 28px;
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--primary);
+    overflow-wrap: anywhere;
+}
+
+.course__meta {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-muted);
+}
+
+.course__last {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.course__delete {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    opacity: 0;
+    cursor: pointer;
+    transition: opacity 0.16s ease, color 0.16s ease;
+}
+
+.course:hover .course__delete {
+    opacity: 0.65;
+}
+
+.course__delete:hover {
+    opacity: 1;
+    color: var(--error);
+}
+
+.course-form {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.course-form__input {
+    flex: 1;
+    min-width: 0;
+    padding: 12px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    font-family: inherit;
+    font-size: 14px;
+    color: var(--text);
+    outline: none;
+    transition: border-color 0.16s ease;
+}
+
+.course-form__input::placeholder {
+    color: var(--placeholder);
+}
+
+.course-form__input:focus {
+    border-color: var(--primary);
+}
+
+.course-form__submit,
+.course-form__cancel {
+    flex-shrink: 0;
+    padding: 0 16px;
+    border-radius: var(--r-md);
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.course-form__submit {
+    background: var(--primary);
+    border: none;
+    color: #FFFFFF;
+}
+
+.course-form__submit:hover {
+    background: var(--primary-hover);
+}
+
+.course-form__cancel {
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    color: var(--text-body);
+}
+
+.course-form__cancel:hover {
+    background: var(--surface-hover);
     color: var(--primary);
 }
 
@@ -1067,7 +1261,7 @@ a:hover {
         padding: 0 12px;
     }
 
-    .header__burger {
+    .icon-btn.header__burger {
         display: flex;
     }
 
@@ -1083,6 +1277,33 @@ a:hover {
     .app__body {
         gap: 0;
         padding: 14px 12px 16px;
+    }
+
+    .header__course {
+        max-width: 150px;
+        font-size: 14px;
+    }
+
+    .courses {
+        padding: 14px 12px 24px;
+    }
+
+    .courses__list {
+        grid-template-columns: 1fr;
+    }
+
+    .course-form {
+        flex-wrap: wrap;
+    }
+
+    .course-form__input {
+        flex-basis: 100%;
+    }
+
+    .course-form__submit,
+    .course-form__cancel {
+        flex: 1;
+        height: 42px;
     }
 
     .sidebar {

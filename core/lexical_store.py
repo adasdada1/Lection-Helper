@@ -10,10 +10,52 @@ logger = logging.getLogger(__name__)
 
 _FTS_AVAILABLE: bool | None = None
 
+_FTS_SCHEMA = """
+    CREATE VIRTUAL TABLE IF NOT EXISTS lecture_chunks_fts
+    USING fts5(
+        chunk_id UNINDEXED,
+        doc_id UNINDEXED,
+        course_id UNINDEXED,
+        filename UNINDEXED,
+        source_type UNINDEXED,
+        content_kind UNINDEXED,
+        chunk_index UNINDEXED,
+        text,
+        tokenize='unicode61'
+    )
+"""
+
+_FTS_COLUMNS = (
+    "chunk_id, doc_id, course_id, filename, source_type, content_kind, chunk_index, text"
+)
+
 
 def _connect():
     """ОТКРЫТЬ SQLITE."""
     return connect_db()
+
+
+def _migrate_add_course_id(conn) -> None:
+    """пересоздать fts5 с колонкой курса. fts5 не умеет alter table."""
+    rows = conn.execute(
+        "SELECT chunk_id, doc_id, filename, source_type, content_kind, chunk_index, text "
+        "FROM lecture_chunks_fts"
+    ).fetchall()
+    saved = [
+        (r["chunk_id"], r["doc_id"], None, r["filename"], r["source_type"],
+         r["content_kind"], r["chunk_index"], r["text"])
+        for r in rows
+    ]
+
+    conn.execute("DROP TABLE lecture_chunks_fts")
+    conn.execute(_FTS_SCHEMA)
+    if saved:
+        conn.executemany(
+            f"INSERT INTO lecture_chunks_fts ({_FTS_COLUMNS}) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            saved,
+        )
+    logger.info("пересоздали fts5 с course_id, перенесли фрагментов: %d", len(saved))
 
 
 def _init_db() -> bool:
@@ -23,24 +65,40 @@ def _init_db() -> bool:
 
     try:
         with _connect() as conn:
-            conn.execute("""
-                CREATE VIRTUAL TABLE IF NOT EXISTS lecture_chunks_fts
-                USING fts5(
-                    chunk_id UNINDEXED,
-                    doc_id UNINDEXED,
-                    filename UNINDEXED,
-                    source_type UNINDEXED,
-                    content_kind UNINDEXED,
-                    chunk_index UNINDEXED,
-                    text,
-                    tokenize='unicode61'
-                )
-            """)
+            existing = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(lecture_chunks_fts)")
+            }
+            if existing and "course_id" not in existing:
+                _migrate_add_course_id(conn)
+            conn.execute(_FTS_SCHEMA)
         _FTS_AVAILABLE = True
     except sqlite3.OperationalError as exc:
         logger.warning("sqlite fts5 недоступен: %s", exc)
         _FTS_AVAILABLE = False
     return _FTS_AVAILABLE
+
+
+def backfill_course_id() -> int:
+    """проставить курс фрагментам по их документам."""
+    if not _init_db():
+        return 0
+
+    with _connect() as conn:
+        pairs = conn.execute(
+            "SELECT doc_id, course_id FROM documents WHERE course_id IS NOT NULL"
+        ).fetchall()
+        updated = 0
+        for row in pairs:
+            cur = conn.execute(
+                "UPDATE lecture_chunks_fts SET course_id = ? "
+                "WHERE doc_id = ? AND course_id IS NULL",
+                (row["course_id"], row["doc_id"]),
+            )
+            updated += cur.rowcount
+
+    logger.info("проставили course_id у %d фрагментов fts5", updated)
+    return updated
 
 
 def _tokenize_query(query: str) -> str | None:
@@ -58,6 +116,7 @@ def add_chunks(
     chunks: list[dict],
     filename: str,
     source_type: str,
+    course_id: str | None = None,
 ) -> int:
     """сохранить фрагменты в fts5."""
     if not _init_db():
@@ -71,6 +130,7 @@ def add_chunks(
         rows.append((
             f"{doc_id}_chunk_{chunk['chunk_index']}",
             doc_id,
+            course_id,
             filename,
             source_type,
             content_kind,
@@ -81,9 +141,8 @@ def add_chunks(
     with _connect() as conn:
         conn.execute("DELETE FROM lecture_chunks_fts WHERE doc_id = ?", (doc_id,))
         conn.executemany(
-            """INSERT INTO lecture_chunks_fts
-               (chunk_id, doc_id, filename, source_type, content_kind, chunk_index, text)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            f"INSERT INTO lecture_chunks_fts ({_FTS_COLUMNS}) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             rows,
         )
 
@@ -91,7 +150,13 @@ def add_chunks(
     return len(rows)
 
 
-def search(query: str, top_k: int = 5, content_kind: str | None = None) -> list[dict]:
+def search(
+    query: str,
+    top_k: int = 5,
+    content_kind: str | None = None,
+    course_id: str | None = None,
+    doc_id: str | None = None,
+) -> list[dict]:
     """найти фрагменты по bm25."""
     if top_k <= 0 or not _init_db():
         return []
@@ -101,14 +166,20 @@ def search(query: str, top_k: int = 5, content_kind: str | None = None) -> list[
         return []
 
     sql = (
-        "SELECT chunk_id, doc_id, filename, source_type, content_kind, chunk_index, "
-        "text, bm25(lecture_chunks_fts) AS score "
+        "SELECT chunk_id, doc_id, course_id, filename, source_type, content_kind, "
+        "chunk_index, text, bm25(lecture_chunks_fts) AS score "
         "FROM lecture_chunks_fts WHERE lecture_chunks_fts MATCH ?"
     )
     params: list = [fts_query]
     if content_kind:
         sql += " AND content_kind = ?"
         params.append(content_kind)
+    if course_id:
+        sql += " AND course_id = ?"
+        params.append(course_id)
+    if doc_id:
+        sql += " AND doc_id = ?"
+        params.append(doc_id)
     sql += " ORDER BY score LIMIT ?"
     params.append(top_k)
 
@@ -126,6 +197,7 @@ def search(query: str, top_k: int = 5, content_kind: str | None = None) -> list[
             "text": row["text"],
             "metadata": {
                 "doc_id": row["doc_id"],
+                "course_id": row["course_id"],
                 "filename": row["filename"],
                 "source_type": row["source_type"],
                 "content_kind": row["content_kind"],

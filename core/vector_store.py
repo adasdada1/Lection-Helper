@@ -36,6 +36,7 @@ def add_chunks(
     embeddings: list[list[float]],
     filename: str,
     source_type: str,
+    course_id: str | None = None,
 ) -> int:
     """сохранить фрагменты и их векторы. возвращает длину"""
     collection = _get_collection()
@@ -57,6 +58,8 @@ def add_chunks(
             "content_kind": content_kind,
             "chunk_index": chunk["chunk_index"],
         }
+        if course_id:
+            meta["course_id"] = course_id
 
         metadatas.append(meta)
 
@@ -75,7 +78,13 @@ def add_chunks(
 
 
 # чтение и поиск ---------------------------------------------------------------------------
-def search(query_embedding: list[float], top_k: int = 5, content_kind: str | None = None) -> list[dict]:
+def search(
+    query_embedding: list[float],
+    top_k: int = 5,
+    content_kind: str | None = None,
+    course_id: str | None = None,
+    doc_id: str | None = None,
+) -> list[dict]:
     """найти ближайшие фрагменты по вектору запроса."""
     collection = _get_collection()
 
@@ -87,8 +96,19 @@ def search(query_embedding: list[float], top_k: int = 5, content_kind: str | Non
         "n_results": min(top_k, collection.count()),
         "include": ["documents", "metadatas", "distances"],
     }
+
+    conditions = []
     if content_kind:
-        query_kwargs["where"] = {"content_kind": content_kind}
+        conditions.append({"content_kind": content_kind})
+    if course_id:
+        conditions.append({"course_id": course_id})
+    if doc_id:
+        conditions.append({"doc_id": doc_id})
+
+    if len(conditions) == 1:
+        query_kwargs["where"] = conditions[0]
+    elif conditions:
+        query_kwargs["where"] = {"$and": conditions}
 
     results = collection.query(**query_kwargs)
 
@@ -126,6 +146,44 @@ def list_documents() -> list[dict]:
         docs[doc_id]["chunk_count"] += 1
 
     return list(docs.values())
+
+
+def backfill_course_id() -> int:
+    """проставить курс метаданным фрагментов по их документам."""
+    collection = _get_collection()
+
+    if collection.count() == 0:
+        return 0
+
+    from core.doc_store import list_documents
+    course_by_doc = {
+        d["doc_id"]: d.get("course_id")
+        for d in list_documents()
+        if d.get("course_id")
+    }
+    if not course_by_doc:
+        return 0
+
+    all_data = collection.get(include=["metadatas"])
+
+    ids_to_update = []
+    metas_to_update = []
+    for chunk_id, meta in zip(all_data["ids"], all_data["metadatas"]):
+        if meta.get("course_id"):
+            continue
+        course_id = course_by_doc.get(meta.get("doc_id"))
+        if not course_id:
+            continue
+        updated = dict(meta)
+        updated["course_id"] = course_id
+        ids_to_update.append(chunk_id)
+        metas_to_update.append(updated)
+
+    if ids_to_update:
+        collection.update(ids=ids_to_update, metadatas=metas_to_update)
+        logger.info("проставили course_id у %d фрагментов chromadb", len(ids_to_update))
+
+    return len(ids_to_update)
 
 
 def delete_document(doc_id: str) -> int:

@@ -24,6 +24,18 @@ def _init_db() -> None:
             );
         """)
 
+        columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(documents)")
+        }
+        if "course_id" not in columns:
+            conn.execute("ALTER TABLE documents ADD COLUMN course_id TEXT")
+            logger.info("добавили колонку course_id в documents")
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_documents_course_id "
+            "ON documents(course_id)"
+        )
+
 def _connect():
     """открыть sqlite."""
     return connect_db()
@@ -38,6 +50,7 @@ def add_document(
     display_summary: str | None,
     chunk_count_transcript: int = 0,
     chunk_count_summary: int = 0,
+    course_id: str | None = None,
 ) -> None:
     """сохранить документ."""
     now = datetime.now().isoformat()
@@ -45,8 +58,8 @@ def add_document(
         conn.execute(
             """INSERT OR REPLACE INTO documents
                (doc_id, filename, source_type, transcript, full_summary, display_summary,
-                chunk_count_transcript, chunk_count_summary, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                chunk_count_transcript, chunk_count_summary, created_at, course_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 doc_id,
                 filename,
@@ -57,6 +70,7 @@ def add_document(
                 chunk_count_transcript,
                 chunk_count_summary,
                 now,
+                course_id,
             ),
         )
     logger.info("сохранили данные документа в SQLITE, doc_id=%s", doc_id)
@@ -69,14 +83,20 @@ def get_document(doc_id: str) -> dict | None:
     return dict(row) if row else None
 
 
-def list_documents() -> list[dict]:
+def list_documents(course_id: str | None = None) -> list[dict]:
     """получить документы без больших текстов."""
+    sql = (
+        "SELECT doc_id, filename, source_type, chunk_count_transcript, "
+        "chunk_count_summary, created_at, course_id FROM documents"
+    )
+    params: list = []
+    if course_id:
+        sql += " WHERE course_id = ?"
+        params.append(course_id)
+    sql += " ORDER BY created_at DESC"
+
     with _connect() as conn:
-        rows = conn.execute(
-            """SELECT doc_id, filename, source_type, chunk_count_transcript,
-                      chunk_count_summary, created_at
-               FROM documents ORDER BY created_at DESC"""
-        ).fetchall()
+        rows = conn.execute(sql, params).fetchall()
 
     result = []
     for r in rows:

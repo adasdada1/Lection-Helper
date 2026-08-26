@@ -50,6 +50,17 @@ def _init_db() -> None:
         if "sources_json" not in columns:
             conn.execute("ALTER TABLE messages ADD COLUMN sources_json TEXT")
 
+        chat_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(chats)")
+        }
+        if "course_id" not in chat_columns:
+            conn.execute("ALTER TABLE chats ADD COLUMN course_id TEXT")
+            logger.info("добавили колонку course_id в chats")
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chats_course_id ON chats(course_id)"
+        )
+
 
 def _connect():
     """открыть sqlite."""
@@ -58,7 +69,7 @@ def _connect():
 
 # операции с чатами ---------------------------------------------------------------------------
 
-def create_chat(title: str | None = None) -> dict:
+def create_chat(title: str | None = None, course_id: str | None = None) -> dict:
     """создать чат."""
     chat_id = str(uuid.uuid4())
     now = datetime.now().isoformat()
@@ -66,22 +77,32 @@ def create_chat(title: str | None = None) -> dict:
 
     with _connect() as conn:
         conn.execute(
-            "INSERT INTO chats (chat_id, title, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?)",
-            (chat_id, t, now, now),
+            "INSERT INTO chats (chat_id, title, created_at, updated_at, course_id) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (chat_id, t, now, now, course_id),
         )
 
-    logger.info("создали чат %s (%s)", chat_id, t)
-    return {"chat_id": chat_id, "title": t, "created_at": now, "updated_at": now}
+    logger.info("создали чат %s (%s) в курсе %s", chat_id, t, course_id)
+    return {
+        "chat_id": chat_id,
+        "title": t,
+        "created_at": now,
+        "updated_at": now,
+        "course_id": course_id,
+    }
 
 
-def list_chats() -> list[dict]:
+def list_chats(course_id: str | None = None) -> list[dict]:
     """получить список чатов."""
+    sql = "SELECT chat_id, title, created_at, updated_at, course_id FROM chats"
+    params: list = []
+    if course_id:
+        sql += " WHERE course_id = ?"
+        params.append(course_id)
+    sql += " ORDER BY updated_at DESC"
+
     with _connect() as conn:
-        rows = conn.execute(
-            "SELECT chat_id, title, created_at, updated_at "
-            "FROM chats ORDER BY updated_at DESC"
-        ).fetchall()
+        rows = conn.execute(sql, params).fetchall()
 
     return [dict(r) for r in rows]
 
@@ -90,7 +111,7 @@ def get_chat(chat_id: str) -> dict | None:
     """получить чат по id."""
     with _connect() as conn:
         row = conn.execute(
-            "SELECT chat_id, title, summary, created_at, updated_at "
+            "SELECT chat_id, title, summary, created_at, updated_at, course_id "
             "FROM chats WHERE chat_id = ?",
             (chat_id,),
         ).fetchone()

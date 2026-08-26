@@ -32,6 +32,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const docsList        = document.getElementById('docs-list');
     const docsEmpty       = document.getElementById('docs-empty');
 
+    const coursesPanel   = document.getElementById('tab-courses');
+    const coursesList    = document.getElementById('courses-list');
+    const newCourseBtn   = document.getElementById('new-course-btn');
+    const courseForm     = document.getElementById('course-form');
+    const courseTitleInput = document.getElementById('course-title-input');
+    const courseFormCancel = document.getElementById('course-form-cancel');
+    const coursesBack    = document.getElementById('courses-back');
+    const headerBrand    = document.getElementById('header-brand');
+    const headerCourse   = document.getElementById('header-course');
+    const tabNav         = document.getElementById('tab-nav');
+
     // дополнительные элементы для нескольких чатов
     const chatList       = document.getElementById('chat-list');
     // модальное окно
@@ -81,13 +92,163 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    let currentCourseId = null;
+    let coursesData = [];
+
+    const screens = { courses: coursesPanel, chat: tabChat, upload: tabUpload };
+
+    const showScreen = (name) => {
+        Object.keys(screens).forEach((key) => {
+            screens[key].classList.toggle('hidden', key !== name);
+        });
+        const inCourse = name !== 'courses';
+        coursesBack.classList.toggle('hidden', !inCourse);
+        headerBrand.classList.toggle('hidden', inCourse);
+        headerCourse.classList.toggle('hidden', !inCourse);
+        tabNav.classList.toggle('hidden', !inCourse);
+        newChatBtn.classList.toggle('hidden', name !== 'chat');
+        mobileDialogsToggle.classList.toggle('hidden', name !== 'chat');
+        if (name !== 'chat') closeMobileSidebar();
+    };
+
+    async function loadCourses() {
+        try {
+            const res = await fetch('/api/courses');
+            if (res.ok) {
+                const data = await res.json();
+                coursesData = data.courses;
+                renderCourseList();
+            }
+        } catch (e) {
+            console.error('не удалось загрузить курсы:', e);
+        }
+    }
+
+    function renderCourseList() {
+        coursesList.innerHTML = '';
+        if (coursesData.length === 0) {
+            coursesList.innerHTML = '<p class="note">Курсов пока нет. Создайте первый, чтобы загрузить в него материалы.</p>';
+            return;
+        }
+
+        coursesData.forEach(course => {
+            const card = document.createElement('article');
+            card.className = 'course';
+
+            const title = document.createElement('h4');
+            title.className = 'course__title';
+            title.textContent = course.title;
+
+            const meta = document.createElement('p');
+            meta.className = 'course__meta';
+            meta.textContent = course.document_count + ' материалов \u00b7 ' + course.chat_count + ' диалогов';
+
+            card.appendChild(title);
+            card.appendChild(meta);
+
+            if (course.last_document) {
+                const last = document.createElement('p');
+                last.className = 'course__last';
+                last.textContent = 'Последнее: ' + course.last_document;
+                card.appendChild(last);
+            }
+
+            const delBtn = document.createElement('button');
+            delBtn.type = 'button';
+            delBtn.className = 'course__delete';
+            delBtn.setAttribute('aria-label', 'Удалить курс');
+            delBtn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>';
+            delBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                deleteCourse(course);
+            });
+            card.appendChild(delBtn);
+
+            card.addEventListener('click', () => openCourse(course));
+            coursesList.appendChild(card);
+        });
+    }
+
+    async function createCourse(title) {
+        try {
+            const res = await fetch('/api/courses', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title }),
+            });
+            if (res.ok) {
+                const course = await res.json();
+                coursesData.unshift(course);
+                renderCourseList();
+                openCourse(course);
+            }
+        } catch (e) {
+            console.error('не удалось создать курс:', e);
+        }
+    }
+
+    async function deleteCourse(course) {
+        const text = 'Удалить курс \u00ab' + course.title + '\u00bb? Вместе с ним удалятся '
+            + course.document_count + ' материалов и ' + course.chat_count + ' диалогов.';
+        if (!confirm(text)) return;
+        try {
+            const res = await fetch('/api/courses/' + course.course_id, { method: 'DELETE' });
+            if (res.ok) {
+                coursesData = coursesData.filter(c => c.course_id !== course.course_id);
+                renderCourseList();
+            }
+        } catch (e) {
+            console.error('не удалось удалить курс:', e);
+        }
+    }
+
+    function openCourse(course) {
+        currentCourseId = course.course_id;
+        headerCourse.textContent = course.title;
+        currentChatId = null;
+        chatsData = [];
+        tabBtns.forEach(b => b.classList.toggle('tab--active', b.dataset.tab === 'chat'));
+        showScreen('chat');
+        loadChats();
+        refreshDocuments();
+    }
+
+    function backToCourses() {
+        currentCourseId = null;
+        currentChatId = null;
+        chatsData = [];
+        showScreen('courses');
+        loadCourses();
+    }
+
+    coursesBack.addEventListener('click', backToCourses);
+
+    newCourseBtn.addEventListener('click', () => {
+        courseForm.classList.remove('hidden');
+        courseTitleInput.focus();
+    });
+
+    courseFormCancel.addEventListener('click', () => {
+        courseForm.classList.add('hidden');
+        courseTitleInput.value = '';
+    });
+
+    courseForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const title = courseTitleInput.value.trim();
+        if (!title) return;
+        courseForm.classList.add('hidden');
+        courseTitleInput.value = '';
+        createCourse(title);
+    });
+
     // управление чатами ====================================================================
     let currentChatId = null;
     let chatsData = [];
 
     async function loadChats() {
         try {
-            const res = await fetch('/api/chats');
+            const res = await fetch('/api/chats?course_id=' + currentCourseId);
             if (res.ok) {
                 const data = await res.json();
                 chatsData = data.chats;
@@ -135,7 +296,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function createNewChat() {
         try {
-            const res = await fetch('/api/chats', { method: 'POST' });
+            const res = await fetch('/api/chats', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ course_id: currentCourseId }),
+            });
             if (res.ok) {
                 const chat = await res.json();
                 chatsData.unshift(chat); // добавить наверх
@@ -205,8 +370,8 @@ document.addEventListener('DOMContentLoaded', () => {
         `;
     }
 
-    // загрузить список чатов
-    loadChats();
+    showScreen('courses');
+    loadCourses();
 
     // кнопки нового чата ====================================================================
     newChatBtn.addEventListener('click', () => createNewChat());
@@ -219,10 +384,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const target = btn.dataset.tab;
             tabBtns.forEach(b => b.classList.remove('tab--active'));
             btn.classList.add('tab--active');
-            Object.values(tabs).forEach(t => t.classList.add('hidden'));
-            tabs[target].classList.remove('hidden');
-            mobileDialogsToggle.classList.toggle('hidden', target !== 'chat');
-            if (target !== 'chat') closeMobileSidebar();
+            showScreen(target);
 
             if (target === 'upload') refreshDocuments();
         });
@@ -399,7 +561,11 @@ document.addEventListener('DOMContentLoaded', () => {
         // если чат не выбран, создать его
         if (!currentChatId) {
             try {
-                const crc = await fetch('/api/chats', { method: 'POST' });
+                const crc = await fetch('/api/chats', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ course_id: currentCourseId }),
+                });
                 if (crc.ok) {
                     const chat = await crc.json();
                     chatsData.unshift(chat);
@@ -502,6 +668,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const formData = new FormData();
         formData.append('file', file);
+        if (currentCourseId) formData.append('course_id', currentCourseId);
 
         try {
             const res = await fetch('/api/upload', { method: 'POST', body: formData });
@@ -585,7 +752,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // список документов ====================================================================
     async function refreshDocuments() {
         try {
-            const res = await fetch('/api/documents');
+            const res = await fetch('/api/documents?course_id=' + currentCourseId);
             if (!res.ok) return;
 
             const { documents } = await res.json();
@@ -674,6 +841,4 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // первая загрузка списка документов
-    refreshDocuments();
 });

@@ -20,14 +20,28 @@ from core.config import (
 
 logger = logging.getLogger(__name__)
 
-async def ask(question: str, chat_id: str, top_k: int = RETRIEVAL_TOP_K) -> dict:
+async def ask(
+    question: str,
+    chat_id: str,
+    top_k: int = RETRIEVAL_TOP_K,
+    scope_doc_id: str | None = None,
+) -> dict:
     """ответить на вопрос в указанном чате."""
+    chat = chat_memory.get_chat(chat_id)
+    course_id = chat.get("course_id") if chat else None
+
     # 1. вектор вопроса
     embedder = get_embedder()
     query_embedding = embedder.embed_query(question)
 
     # 2. фрагменты лекций
-    matches = _retrieve_candidates(question, query_embedding, limit=top_k)
+    matches = _retrieve_candidates(
+        question,
+        query_embedding,
+        limit=top_k,
+        course_id=course_id,
+        scope_doc_id=scope_doc_id,
+    )
     from core.reranker import rerank_balanced
     matches = rerank_balanced(
         question,
@@ -102,27 +116,39 @@ def _rrf_merge(result_lists: list[list[dict]], limit: int) -> list[dict]:
     )[:limit]
 
 
-def _retrieve_candidates(question: str, query_embedding: list[float], limit: int) -> list[dict]:
-    """найти фрагменты конспекта и транскрипта."""
+def _retrieve_candidates(
+    question: str,
+    query_embedding: list[float],
+    limit: int,
+    course_id: str | None = None,
+    scope_doc_id: str | None = None,
+) -> list[dict]:
+    """найти фрагменты конспекта и транскрипта в пределах курса."""
+    scope = {"course_id": course_id, "doc_id": scope_doc_id}
+
     dense_summary = search(
         query_embedding,
         top_k=DENSE_TOP_K_SUMMARY,
         content_kind="summary",
+        **scope,
     )
     dense_transcript = search(
         query_embedding,
         top_k=DENSE_TOP_K_TRANSCRIPT,
         content_kind="transcript",
+        **scope,
     )
     lexical_summary = lexical_search(
         question,
         top_k=LEXICAL_TOP_K_SUMMARY,
         content_kind="summary",
+        **scope,
     )
     lexical_transcript = lexical_search(
         question,
         top_k=LEXICAL_TOP_K_TRANSCRIPT,
         content_kind="transcript",
+        **scope,
     )
     return _rrf_merge(
         [dense_summary, dense_transcript, lexical_summary, lexical_transcript],

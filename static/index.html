@@ -19,21 +19,43 @@
 
     <!-- ============ шапка ============ -->
     <header class="header">
-        <button type="button" id="mobile-dialogs-toggle" class="icon-btn header__burger" aria-label="Открыть диалоги" aria-controls="chat-sidebar" aria-expanded="false" title="Диалоги">
+        <button type="button" id="mobile-dialogs-toggle" class="icon-btn header__burger hidden" aria-label="Открыть диалоги" aria-controls="chat-sidebar" aria-expanded="false" title="Диалоги">
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>
         </button>
-        <nav class="header__tabs">
+        <button type="button" id="courses-back" class="icon-btn header__back hidden" aria-label="К списку курсов" title="К списку курсов">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
+        </button>
+        <span class="header__brand" id="header-brand">Lection Helper</span>
+        <span class="header__course hidden" id="header-course"></span>
+        <nav class="header__tabs hidden" id="tab-nav">
             <button class="tab tab--active" data-tab="chat">Чат</button>
             <button class="tab" data-tab="upload">Загрузка</button>
         </nav>
-        <button id="new-chat-btn" class="icon-btn header__action" aria-label="Новый чат" title="Начать новый чат">
+        <button id="new-chat-btn" class="icon-btn header__action hidden" aria-label="Новый чат" title="Начать новый чат">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
         </button>
 
     </header>
 
+    <div id="tab-courses" class="panel">
+        <div class="courses">
+            <div class="courses__header">
+                <h3 class="courses__title">Мои курсы</h3>
+                <button type="button" id="new-course-btn" class="courses__add">Новый курс</button>
+            </div>
+            <form id="course-form" class="course-form hidden">
+                <input type="text" id="course-title-input" class="course-form__input" placeholder="Название курса" maxlength="120" autocomplete="off">
+                <button type="submit" class="course-form__submit">Создать</button>
+                <button type="button" id="course-form-cancel" class="course-form__cancel">Отмена</button>
+            </form>
+            <div id="courses-list" class="courses__list">
+                <div class="dots"><span class="dots__item"></span><span class="dots__item"></span><span class="dots__item"></span></div>
+            </div>
+        </div>
+    </div>
+
     <!-- ============ вкладка: чат ============ -->
-    <div id="tab-chat" class="panel">
+    <div id="tab-chat" class="panel hidden">
         <div class="app__body">
             <aside class="sidebar" id="chat-sidebar">
                 <div class="sidebar__header">

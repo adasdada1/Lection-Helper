@@ -1,6 +1,7 @@
 """обрабатывает лекцию от загрузки до сохранения."""
 
 import os
+import gc
 import uuid
 import subprocess
 import logging
@@ -27,11 +28,12 @@ class IngestJobManager:
     def __init__(self):
         self.jobs: dict[str, dict] = {}
 
-    def create_job(self, filename: str) -> str:
+    def create_job(self, filename: str, course_id: str | None = None) -> str:
         job_id = str(uuid.uuid4())
         self.jobs[job_id] = {
             "job_id": job_id,
             "filename": filename,
+            "course_id": course_id,
             "status": "pending",
             "stage": "Ожидание",
             "progress": 0,
@@ -58,6 +60,7 @@ class IngestJobManager:
     def run(self, job_id: str, file_path: str):
         """обработать загруженный файл."""
         filename = self.jobs[job_id]["filename"]
+        course_id = self.jobs[job_id].get("course_id")
         doc_id = str(uuid.uuid4())
         self._update(job_id, doc_id=doc_id, status="processing")
 
@@ -100,7 +103,9 @@ class IngestJobManager:
 
             self._update(job_id, transcript=transcript)
 
-            # todo: при нехватке памяти выгрузить WHISPER и очистить cuda
+            del processor
+            _free_gpu()
+            logger.info("выгрузили whisper из видеопамяти")
 
             # 4. сделать чек-лист
             self._update(job_id, stage="Генерация чек-листа", progress=50)
@@ -168,6 +173,7 @@ class IngestJobManager:
                 embeddings=embeddings,
                 filename=filename,
                 source_type=source_type,
+                course_id=course_id,
             )
             self._update(job_id, chunk_count=stored)
 
@@ -177,6 +183,7 @@ class IngestJobManager:
                     chunks=chunks,
                     filename=filename,
                     source_type=source_type,
+                    course_id=course_id,
                 )
             except Exception as e:
                 logger.warning("лексический индекс не обновлен: %s", e)
@@ -193,6 +200,7 @@ class IngestJobManager:
                 display_summary=display_summary,
                 chunk_count_transcript=chunk_count_transcript,
                 chunk_count_summary=chunk_count_summary,
+                course_id=course_id,
             )
 
             # готово
@@ -427,6 +435,17 @@ def _generate_summary(transcript: str, checklist: str) -> str:
     if not summary:
         raise RuntimeError("LLM вернул пустой итоговый конспект")
     return summary
+
+
+def _free_gpu() -> None:
+    """освободить видеопамять после выгрузки модели."""
+    gc.collect()
+    try:
+        import torch
+    except ImportError:
+        return
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def _safe_remove(path: str) -> None:
