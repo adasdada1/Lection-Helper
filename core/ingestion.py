@@ -82,28 +82,13 @@ class IngestJobManager:
                 job_id,
                 stage="Транскрибация",
                 progress=10,
-                transcription={"current": 0, "total": None, "percent": 0},
+                transcription={"active": True},
             )
             from core.transcriber import MediaProcessor
             processor = MediaProcessor()  # здесь загрузится whisper
 
-            def _on_transcription_progress(current: int, total: int) -> None:
-                percent = round(current / total * 100) if total else 0
-                self._update(
-                    job_id,
-                    stage=f"Транскрибация ({current}/{total} фрагментов)",
-                    progress=10 + round((current / total) * 30) if total else 10,
-                    transcription={
-                        "current": current,
-                        "total": total,
-                        "percent": percent,
-                    },
-                )
-
-            transcript = processor.transcribe(
-                audio_path,
-                progress_callback=_on_transcription_progress,
-            )
+            transcript = processor.transcribe(audio_path)
+            self._update(job_id, transcription=None)
             logger.info("транскрипция готова, символов: %d", len(transcript))
 
             # 3. очистить текст

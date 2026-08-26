@@ -497,7 +497,6 @@ document.addEventListener('DOMContentLoaded', () => {
         statusText.textContent = 'Загрузка файла…';
         statusText.className = 'pipeline__status';
         stageDetail.classList.add('hidden');
-        stageDetail.textContent = '';
         checklistCard.classList.add('hidden');
         summaryCard.classList.add('hidden');
 
@@ -538,13 +537,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 progressBar.style.setProperty('--pipeline-progress', `${job.progress}%`);
                 statusText.textContent = job.stage;
 
-                if (job.transcription && job.transcription.total) {
-                    stageDetail.classList.remove('hidden');
-                    stageDetail.textContent = `${job.transcription.current}/${job.transcription.total} фрагментов · ${job.transcription.percent}%`;
-                } else {
-                    stageDetail.classList.add('hidden');
-                    stageDetail.textContent = '';
-                }
+                stageDetail.classList.toggle(
+                    'hidden',
+                    !(job.transcription && job.transcription.active),
+                );
 
                 // показать чек-лист и конспект сразу после готовности
                 if (job.checklist && checklistCard.classList.contains('hidden')) {

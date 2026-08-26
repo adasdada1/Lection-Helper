@@ -1,6 +1,7 @@
 """rag-поиск по лекциям с памятью чатов."""
 
 import logging
+import os
 from core.embeddings import get_embedder
 from core.vector_store import search
 from core.lexical_store import search as lexical_search
@@ -129,6 +130,20 @@ def _retrieve_candidates(question: str, query_embedding: list[float], limit: int
     )
 
 
+def _load_prompt(filename: str) -> str:
+    """загрузить системный промпт из файла."""
+    path = os.path.join("prompts", filename)
+    if not os.path.exists(path):
+        raise RuntimeError(
+            f"Файл системного промпта не найден: {path}"
+        )
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read().strip()
+    if not content:
+        raise RuntimeError(f"Файл промпта пуст: {path}")
+    return content
+
+
 def _build_messages(
     question: str,
     matches: list[dict],
@@ -139,25 +154,9 @@ def _build_messages(
 
     # системный промпт
     if matches:
-        system_prompt = (
-            "Ты - полезный ассистент по лекционным материалам. "
-            "Тебе предоставлены фрагменты из лекций и история диалога. "
-            "Отвечай на вопросы студента строго на основе лекционных фрагментов. "
-            "Используй историю диалога для понимания контекста вопроса, "
-            "но приоритет отдавай фактам из лекций. "
-            "Если информации недостаточно, скажи об этом честно.\n"
-            "ВАЖНОЕ ПРАВИЛО: При написании математических формул используй ТОЛЬКО стандартный синтаксис LaTeX "
-            "($...$ для строчных формул и $$...$$ для выключных). Категорически запрещено дублировать "
-            "одну и ту же формулу в виде LaTeX и в виде обычного текста/юникода.\n"
-            "Отвечай ясно, структурированно и на русском языке."
-        )
+        system_prompt = _load_prompt("answer_system_prompt.txt")
     else:
-        system_prompt = (
-            "Ты - полезный ассистент. "
-            "В базе знаний пока нет загруженных лекций. "
-            "Постарайся ответить на вопрос общими знаниями, "
-            "и предложи загрузить лекционные материалы для более точных ответов."
-        )
+        system_prompt = _load_prompt("fallback_system_prompt.txt")
 
     messages: list[dict] = [
         {"role": "system", "content": system_prompt},
