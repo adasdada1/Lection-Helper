@@ -106,6 +106,7 @@ async def delete_course(course_id: str):
     from core.vector_store import delete_document as _delete_vec
     from core.lexical_store import delete_document as _delete_lex
     from core.doc_store import delete_document as _delete_sql
+    from core.chunk_times import delete_document as _delete_times
     from core.chat_memory import delete_chat as _delete_chat
 
     doc_ids = course_store.list_course_document_ids(course_id)
@@ -113,6 +114,7 @@ async def delete_course(course_id: str):
         _delete_vec(doc_id)
         _delete_lex(doc_id)
         _delete_sql(doc_id)
+        _delete_times(doc_id)
 
     chat_ids = course_store.list_course_chat_ids(course_id)
     for chat_id in chat_ids:
@@ -296,10 +298,12 @@ async def delete_document(doc_id: str):
     from core.vector_store import delete_document as _delete_vec
     from core.lexical_store import delete_document as _delete_lex
     from core.doc_store import delete_document as _delete_sql
+    from core.chunk_times import delete_document as _delete_times
     
     vec_deleted = _delete_vec(doc_id)
     lex_deleted = _delete_lex(doc_id)
     sql_deleted = _delete_sql(doc_id)
+    _delete_times(doc_id)
     
     if not sql_deleted and vec_deleted == 0 and lex_deleted == 0:
         raise HTTPException(status_code=404, detail="Документ не найден")

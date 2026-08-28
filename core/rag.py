@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 from core.embeddings import get_embedder
 from core.vector_store import search
 from core.lexical_store import search as lexical_search
@@ -156,6 +157,46 @@ def _retrieve_candidates(
     )
 
 
+_METADATA_BLOCK = re.compile(
+    r"<<<RAG_METADATA_START>>>.*?<<<RAG_METADATA_END>>>", re.DOTALL,
+)
+_METADATA_OPEN = re.compile(r"<<<RAG_METADATA_START>>>.*$", re.DOTALL)
+_METADATA_CLOSE = re.compile(r"^.*?<<<RAG_METADATA_END>>>", re.DOTALL)
+_METADATA_KEYS = (
+    '"rag_metadata"', '"search_phrases"', '"common_mistakes"', '"synonyms"',
+)
+_MIN_FRAGMENT_CHARS = 40
+
+
+def _strip_metadata(text: str) -> str:
+    """убрать служебный блок индексации из текста фрагмента."""
+    cleaned = _METADATA_BLOCK.sub("", text)
+    cleaned = _METADATA_OPEN.sub("", cleaned)
+    cleaned = _METADATA_CLOSE.sub("", cleaned)
+
+    if any(key in cleaned for key in _METADATA_KEYS):
+        return ""
+
+    return cleaned.strip()
+
+
+def _clean_matches(matches: list[dict]) -> list[dict]:
+    """очистить фрагменты от служебных блоков и выбросить пустые."""
+    cleaned = []
+    for match in matches:
+        text = _strip_metadata(match.get("text", ""))
+        if len(text) < _MIN_FRAGMENT_CHARS:
+            logger.info(
+                "фрагмент %s отброшен: после очистки осталось %d символов",
+                match.get("id"), len(text),
+            )
+            continue
+        item = dict(match)
+        item["text"] = text
+        cleaned.append(item)
+    return cleaned
+
+
 def _load_prompt(filename: str) -> str:
     """загрузить системный промпт из файла."""
     path = os.path.join("prompts", filename)
@@ -177,6 +218,7 @@ def _build_messages(
 ) -> tuple[list[dict], list[dict]]:
     """собрать сообщения для llm."""
     sources = []
+    matches = _clean_matches(matches)
 
     # системный промпт
     if matches:
@@ -206,14 +248,30 @@ def _build_messages(
 
     # вопрос с rag-контекстом
     if matches:
+        from core.chunk_times import get_times, format_range
+
+        times = get_times([match.get("id") for match in matches])
+
         context_parts = []
         for i, match in enumerate(matches):
             meta = match["metadata"]
             kind = meta.get("content_kind", "transcript")
             kind_label = "Конспект" if kind == "summary" else "Транскрипт"
+            prompt_kind_label = (
+                "Конспект — пересказ, составлен ИИ по этой лекции"
+                if kind == "summary" else "Транскрипт — прямая речь лектора"
+            )
+
+            chunk_time = times.get(match.get("id")) or {}
+            time_label = format_range(
+                chunk_time.get("start_time"), chunk_time.get("end_time"),
+            )
+            time_part = f", {time_label}" if time_label else ""
+
             label = (
-                f"Фрагмент {i + 1} [{kind_label}] "
-                f"(из \"{meta.get('filename', 'материал')}\", чанк #{meta.get('chunk_index')})"
+                f"Фрагмент {i + 1} [{prompt_kind_label}] "
+                f"(из \"{meta.get('filename', 'материал')}\"{time_part}, "
+                f"чанк #{meta.get('chunk_index')})"
             )
             context_parts.append(f"--- {label} ---\n{match['text']}")
             sources.append({
@@ -223,6 +281,9 @@ def _build_messages(
                 "content_kind": kind,
                 "content_kind_label": kind_label,
                 "chunk_index": meta.get("chunk_index"),
+                "start_time": chunk_time.get("start_time"),
+                "end_time": chunk_time.get("end_time"),
+                "time_label": time_label,
                 "text_preview": match["text"][:220] + "…" if len(match["text"]) > 220 else match["text"],
                 "distance": round(match["distance"], 4),
                 "rerank_score": round(match.get("rerank_score", 0), 4),

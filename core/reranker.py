@@ -4,7 +4,7 @@ import logging
 from functools import lru_cache
 from typing import Optional
 
-from core.config import RERANKER_BATCH_SIZE
+from core.config import RERANKER_BATCH_SIZE, RERANK_SCORE_FLOOR
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +111,16 @@ def rerank_balanced(
                 
         results.sort(key=lambda x: float(x["relevance_score"]), reverse=True)
         results = results[:effective_top_n]
+
+        relevant = [r for r in results if float(r["relevance_score"]) >= RERANK_SCORE_FLOOR]
+        if not relevant:
+            relevant = results[:1]
+        if len(relevant) < len(results):
+            logger.info(
+                "отбросили %d фрагментов с оценкой ниже %.2f",
+                len(results) - len(relevant), RERANK_SCORE_FLOOR,
+            )
+        results = relevant
 
         out = []
         for r in results:

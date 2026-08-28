@@ -425,6 +425,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const formatSourceMeta = (source) => {
         const parts = [formatKindLabel(source.content_kind)];
+        if (source.time_label) {
+            parts.push(source.time_label);
+        }
         if (source.chunk_index !== undefined && source.chunk_index !== null) {
             parts.push(`фрагмент #${source.chunk_index}`);
         }
@@ -809,7 +812,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 const doc = data.document;
                 if (doc) {
                     modalTitle.textContent = doc.filename || 'Материалы лекции';
-                    const sections = renderMaterialSection('Конспект', doc.display_summary);
+                    const sections = renderMaterialSection('Конспект', doc.display_summary)
+                        + renderMaterialSection('Чек-лист лекции', doc.checklist);
                     modalBody.innerHTML = sections || '<p class="note">Материалы пока пусты.</p>';
                     applyMathRendering(modalBody);
                 } else {

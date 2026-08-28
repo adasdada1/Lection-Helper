@@ -30,6 +30,9 @@ def _init_db() -> None:
         if "course_id" not in columns:
             conn.execute("ALTER TABLE documents ADD COLUMN course_id TEXT")
             logger.info("добавили колонку course_id в documents")
+        if "checklist" not in columns:
+            conn.execute("ALTER TABLE documents ADD COLUMN checklist TEXT")
+            logger.info("добавили колонку checklist в documents")
 
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_documents_course_id "
@@ -51,6 +54,7 @@ def add_document(
     chunk_count_transcript: int = 0,
     chunk_count_summary: int = 0,
     course_id: str | None = None,
+    checklist: str | None = None,
 ) -> None:
     """сохранить документ."""
     now = datetime.now().isoformat()
@@ -58,8 +62,8 @@ def add_document(
         conn.execute(
             """INSERT OR REPLACE INTO documents
                (doc_id, filename, source_type, transcript, full_summary, display_summary,
-                chunk_count_transcript, chunk_count_summary, created_at, course_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                chunk_count_transcript, chunk_count_summary, created_at, course_id, checklist)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 doc_id,
                 filename,
@@ -71,6 +75,7 @@ def add_document(
                 chunk_count_summary,
                 now,
                 course_id,
+                checklist,
             ),
         )
     logger.info("сохранили данные документа в SQLITE, doc_id=%s", doc_id)

@@ -2,6 +2,8 @@
 
 import os
 import gc
+import re
+import json
 import uuid
 import subprocess
 import logging
@@ -11,6 +13,7 @@ from datetime import datetime
 from core.config import (
     ALLOWED_EXTENSIONS,
     AUDIO_EXTENSIONS,
+    CHECKLIST_MERGE_CHAR_LIMIT,
     DIRECT_LLM_CHAR_LIMIT,
     MAP_CHUNK_CHARS,
     MAP_CHUNK_OVERLAP,
@@ -90,17 +93,24 @@ class IngestJobManager:
             from core.transcriber import MediaProcessor
             processor = MediaProcessor()  # здесь загрузится whisper
 
-            transcript = processor.transcribe(audio_path)
+            segments = processor.transcribe_segments(audio_path)
             self._update(job_id, transcription=None)
-            logger.info("транскрипция готова, символов: %d", len(transcript))
+            logger.info(
+                "транскрипция готова, сегментов: %d, с отметками времени: %d",
+                len(segments),
+                sum(1 for s in segments if s.get("start") is not None),
+            )
 
             # 3. очистить текст
             self._update(job_id, stage="Очистка текста", progress=40)
             bad_words_path = "bad_words.json"
             if os.path.exists(bad_words_path):
-                transcript = processor.clean_text(transcript, bad_words_path)
+                for segment in segments:
+                    segment["text"] = processor.clean_text(segment["text"], bad_words_path)
+                segments = [s for s in segments if s["text"]]
                 logger.info("очистили текст по bad_words.json")
 
+            transcript = " ".join(s["text"] for s in segments).strip()
             self._update(job_id, transcript=transcript)
 
             del processor
@@ -109,13 +119,15 @@ class IngestJobManager:
 
             # 4. сделать чек-лист
             self._update(job_id, stage="Генерация чек-листа", progress=50)
-            checklist = _generate_checklist(transcript)
+            checklist, checklist_parts = _generate_checklist(transcript)
             self._update(job_id, checklist=checklist)
             logger.info("чек-лист готов, символов: %d", len(checklist))
 
             # 5. сделать конспект
             self._update(job_id, stage="Генерация конспекта", progress=60)
-            full_summary_with_metadata = _generate_summary(transcript, checklist)
+            full_summary_with_metadata = _generate_summary(
+                transcript, checklist, checklist_parts,
+            )
             
             import re
             pattern = r"<<<RAG_METADATA_START>>>\s*(.*?)\s*<<<RAG_METADATA_END>>>"
@@ -130,7 +142,7 @@ class IngestJobManager:
 
             # 6. разбить на фрагменты
             self._update(job_id, stage="Разбиение на фрагменты", progress=75)
-            from core.chunker import chunk_text
+            from core.chunker import chunk_text, chunk_segments
             
             INDEX_SUMMARY = True
             INDEX_TRANSCRIPT = True
@@ -138,13 +150,13 @@ class IngestJobManager:
             chunks = []
             
             if INDEX_SUMMARY:
-                summary_chunks = chunk_text(full_summary_with_metadata)
+                summary_chunks = chunk_text(display_summary)
                 for c in summary_chunks:
                     c["content_kind"] = "summary"
                 chunks.extend(summary_chunks)
                 
             if INDEX_TRANSCRIPT:
-                transcript_chunks = chunk_text(transcript)
+                transcript_chunks = chunk_segments(segments)
                 start_idx = chunks[-1]["chunk_index"] + 1 if chunks else 0
                 for i, c in enumerate(transcript_chunks):
                     c["chunk_index"] = start_idx + i
@@ -166,6 +178,7 @@ class IngestJobManager:
             from core.vector_store import add_chunks
             from core.doc_store import add_document
             from core.lexical_store import add_chunks as add_lexical_chunks
+            from core.chunk_times import save_times
 
             stored = add_chunks(
                 doc_id=doc_id,
@@ -187,6 +200,11 @@ class IngestJobManager:
                 )
             except Exception as e:
                 logger.warning("лексический индекс не обновлен: %s", e)
+
+            try:
+                save_times(doc_id, chunks)
+            except Exception as e:
+                logger.warning("отметки времени не сохранены: %s", e)
             
             # сохранить документ в sqlite
             chunk_count_summary = sum(1 for c in chunks if c.get("content_kind") == "summary")
@@ -196,6 +214,7 @@ class IngestJobManager:
                 filename=filename,
                 source_type=source_type,
                 transcript=transcript,
+                checklist=checklist,
                 full_summary=full_summary_with_metadata,
                 display_summary=display_summary,
                 chunk_count_transcript=chunk_count_transcript,
@@ -311,8 +330,8 @@ def _split_text_for_llm(
     return chunks
 
 
-def _generate_checklist(transcript: str) -> str:
-    """сделать чек-лист из транскрипта."""
+def _generate_checklist(transcript: str) -> tuple[str, list[str]]:
+    """сделать чек-лист из транскрипта. вернуть общий чек-лист и его части."""
     checklist_prompt_path = os.path.join("prompts", "check_list_prompt.txt")
     checklist_system_prompt = _load_prompt_file(checklist_prompt_path)
 
@@ -338,9 +357,9 @@ def _generate_checklist(transcript: str) -> str:
 
     if len(transcript) <= DIRECT_LLM_CHAR_LIMIT:
         logger.info("запрашиваем чек-лист у llm")
-        checklist = _call_for_chunk(_truncate_for_llm(transcript))
+        checklist = _call_for_chunk(transcript)
         logger.info("получили чек-лист")
-        return checklist
+        return checklist, [checklist]
 
     chunks = _split_text_for_llm(transcript)
     logger.info("чек-лист создается по частям, частей: %d", len(chunks))
@@ -348,46 +367,85 @@ def _generate_checklist(transcript: str) -> str:
         _call_for_chunk(chunk, index=i, total=len(chunks))
         for i, chunk in enumerate(chunks, start=1)
     ]
+    return _merge_checklists(partials), partials
 
-    combined_partials = _truncate_for_llm(
-        "\n\n".join(f"## Часть {i}\n{part}" for i, part in enumerate(partials, start=1)),
-        max_chars=30_000,
+
+def _merge_checklists(partials: list[str]) -> str:
+    """свести частичные чек-листы в один без потери пунктов."""
+    current = list(partials)
+
+    while len(current) > 1:
+        merged: list[str] = []
+        batch: list[str] = []
+        size = 0
+
+        for part in current:
+            if batch and size + len(part) > CHECKLIST_MERGE_CHAR_LIMIT:
+                merged.append(_merge_checklist_batch(batch) if len(batch) > 1 else batch[0])
+                batch, size = [], 0
+            batch.append(part)
+            size += len(part)
+
+        if batch:
+            merged.append(_merge_checklist_batch(batch) if len(batch) > 1 else batch[0])
+
+        if len(merged) >= len(current):
+            logger.warning("склейка чек-листа не уменьшает объем, оставляем как есть")
+            return "\n\n".join(current)
+
+        logger.info("склейка чек-листа: %d -> %d частей", len(current), len(merged))
+        current = merged
+
+    return current[0]
+
+
+def _merge_checklist_batch(batch: list[str]) -> str:
+    """объединить несколько частичных чек-листов одним запросом."""
+    from core.llm import call_llm
+
+    merge_prompt = _load_prompt_file(
+        os.path.join("prompts", "checklist_merge_prompt.txt")
+    )
+    joined = "\n\n".join(
+        f"## Часть {i}\n{part}" for i, part in enumerate(batch, start=1)
     )
     result = call_llm([
-        {
-            "role": "system",
-            "content": (
-                "Ты объединяешь частичные чек-листы лекции в один полный чек-лист. "
-                "Удали дубли, сохрани конкретные задачи/примеры отдельно, не теряй низкоуверенные пункты. "
-                "Верни только итоговый Markdown чек-лист на русском языке."
-            ),
-        },
-        {"role": "user", "content": combined_partials},
+        {"role": "system", "content": merge_prompt},
+        {"role": "user", "content": joined},
     ])
-    checklist = result["answer"]
-    if not checklist:
+    merged = result["answer"]
+    if not merged:
         raise RuntimeError("LLM вернул пустой итоговый чек-лист")
-    return checklist
+    return merged
 
 
-def _generate_summary(transcript: str, checklist: str) -> str:
+def _generate_summary(
+    transcript: str,
+    checklist: str,
+    checklist_parts: list[str] | None = None,
+) -> str:
     """сделать конспект из транскрипта."""
     summary_prompt_path = os.path.join("prompts", "summary_system_prompt.txt")
     system_prompt_template = _load_prompt_file(summary_prompt_path)
 
     from core.llm import call_llm
 
-    final_system_prompt = system_prompt_template.replace("{checklist}", checklist)
-
-    def _call_for_chunk(chunk: str, index: int | None = None, total: int | None = None) -> str:
+    def _call_for_chunk(
+        chunk: str,
+        part_checklist: str,
+        index: int | None = None,
+        total: int | None = None,
+    ) -> str:
+        system_prompt = system_prompt_template.replace("{checklist}", part_checklist)
         part_note = ""
         if index and total:
             part_note = (
                 f"\nСейчас обрабатывается часть {index}/{total} длинной лекции. "
-                "Сделай полноценный частичный конспект только по этой части."
+                "Чек-лист выше относится только к этой части: закрой все его пункты "
+                "и не пиши о том, чего в этой части нет."
             )
         result = call_llm([
-            {"role": "system", "content": final_system_prompt + part_note},
+            {"role": "system", "content": system_prompt + part_note},
             {"role": "user", "content": chunk},
         ])
         answer = result["answer"]
@@ -397,44 +455,121 @@ def _generate_summary(transcript: str, checklist: str) -> str:
 
     if len(transcript) <= DIRECT_LLM_CHAR_LIMIT:
         logger.info("запрашиваем конспект у LLM")
-        summary = _call_for_chunk(_truncate_for_llm(transcript))
+        summary = _call_for_chunk(transcript, checklist)
         logger.info("получили конспект")
         return summary
 
     chunks = _split_text_for_llm(transcript)
     logger.info("конспект создается по частям, частей: %d", len(chunks))
-    partials = [
-        _call_for_chunk(chunk, index=i, total=len(chunks))
-        for i, chunk in enumerate(chunks, start=1)
-    ]
 
-    combined_partials = _truncate_for_llm(
-        "\n\n".join(f"## Часть {i}\n{part}" for i, part in enumerate(partials, start=1)),
-        max_chars=32_000,
-    )
-    result = call_llm([
-        {
-            "role": "system",
-            "content": (
-                "Ты редактор учебных конспектов. Объедини частичные конспекты в один цельный Markdown-конспект. "
-                "Сохрани структуру, формулы LaTeX, задачи, примеры, предупреждения и итоговые ответы. "
-                "Удали повторы между частями. Верни только итоговый конспект."
-            ),
-        },
-        {
-            "role": "user",
-            "content": (
-                "Итоговый чек-лист для контроля полноты:\n"
-                f"{_truncate_for_llm(checklist, max_chars=8_000)}\n\n"
-                "Частичные конспекты:\n"
-                f"{combined_partials}"
-            ),
-        },
-    ])
-    summary = result["answer"]
-    if not summary:
-        raise RuntimeError("LLM вернул пустой итоговый конспект")
+    parts = checklist_parts or []
+    partials = []
+    for i, chunk in enumerate(chunks, start=1):
+        part_checklist = parts[i - 1] if i - 1 < len(parts) else checklist
+        partials.append(_call_for_chunk(chunk, part_checklist, index=i, total=len(chunks)))
+
+    summary = _join_summaries(partials)
+    logger.info("склеили %d частей конспекта, символов: %d", len(partials), len(summary))
     return summary
+
+
+_METADATA_RE = re.compile(
+    r"<<<RAG_METADATA_START>>>\s*(.*?)\s*<<<RAG_METADATA_END>>>", re.DOTALL,
+)
+_TITLE_RE = re.compile(r"^#\s+(.+)$", re.MULTILINE)
+_SECTION_RE = re.compile(r"^##\s+(.+)$", re.MULTILINE)
+
+
+def _strip_front_matter(text: str) -> str:
+    """убрать заголовок документа и оглавление из части конспекта."""
+    lines = text.strip().splitlines()
+    result: list[str] = []
+    skipping = True
+
+    for line in lines:
+        if skipping:
+            stripped = line.strip()
+            if not stripped or stripped.startswith(">") or stripped.startswith("# "):
+                continue
+            if stripped in ("---", "___"):
+                continue
+            skipping = False
+        result.append(line)
+
+    return "\n".join(result).strip()
+
+
+def _merge_metadata_blocks(blocks: list[str]) -> str | None:
+    """свести служебные блоки частей в один без потери значений."""
+    merged: dict = {}
+    parsed_any = False
+
+    for block in blocks:
+        try:
+            data = json.loads(block)
+        except (ValueError, TypeError):
+            continue
+        items = data.get("rag_metadata")
+        if not isinstance(items, list):
+            continue
+        parsed_any = True
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            for key, value in item.items():
+                if isinstance(value, list):
+                    bucket = merged.setdefault(key, [])
+                    for v in value:
+                        if v not in bucket:
+                            bucket.append(v)
+                elif key not in merged:
+                    merged[key] = value
+
+    if not parsed_any:
+        return None
+
+    payload = json.dumps({"rag_metadata": [merged]}, ensure_ascii=False, indent=2)
+    return f"<<<RAG_METADATA_START>>>\n{payload}\n<<<RAG_METADATA_END>>>"
+
+
+def _join_summaries(partials: list[str]) -> str:
+    """соединить частичные конспекты без обращения к llm."""
+    title = None
+    bodies: list[str] = []
+    metadata_blocks: list[str] = []
+
+    for part in partials:
+        if title is None:
+            found = _TITLE_RE.search(part)
+            if found:
+                title = found.group(1).strip()
+
+        block = _METADATA_RE.search(part)
+        if block:
+            metadata_blocks.append(block.group(1))
+            part = _METADATA_RE.sub("", part)
+
+        body = _strip_front_matter(part)
+        if body:
+            bodies.append(body)
+
+    body = "\n\n".join(bodies)
+
+    sections = _SECTION_RE.findall(body)
+    parts_out: list[str] = []
+    if title:
+        parts_out.append(f"# {title}")
+    if sections:
+        toc = ["> [!summary] Оглавление лекции"]
+        toc.extend(f"> {i}. {name.strip()}" for i, name in enumerate(sections, start=1))
+        parts_out.append("\n".join(toc))
+    parts_out.append(body)
+
+    metadata = _merge_metadata_blocks(metadata_blocks)
+    if metadata:
+        parts_out.append(metadata)
+
+    return "\n\n".join(parts_out).strip()
 
 
 def _free_gpu() -> None:

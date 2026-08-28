@@ -13,6 +13,43 @@ except LookupError:
     nltk.download('punkt_tab', quiet=True)
 
 
+_TIMESTAMP_TOKEN = re.compile(r"<\|(\d+(?:\.\d+)?)\|>")
+_SPECIAL_TOKEN = re.compile(r"<\|[^|]*\|>")
+
+
+def _match_case(original: str, replacement: str) -> str:
+    """подставить замену в том же регистре, что и найденное слово."""
+    if not original or not replacement:
+        return replacement
+    if original.isupper() and len(original) > 1:
+        return replacement.upper()
+    if original[0].isupper():
+        return replacement[0].upper() + replacement[1:]
+    return replacement
+
+
+def _parse_timestamped(raw: str) -> list[dict]:
+    """разобрать вывод whisper с отметками времени на фрагменты."""
+    parts = _TIMESTAMP_TOKEN.split(raw)
+    if len(parts) < 3:
+        return []
+
+    marks: list[tuple[float, str]] = []
+    for i in range(1, len(parts), 2):
+        text = parts[i + 1] if i + 1 < len(parts) else ""
+        marks.append((float(parts[i]), text))
+
+    segments: list[dict] = []
+    for index, (start, text) in enumerate(marks):
+        clean = _SPECIAL_TOKEN.sub("", text).strip()
+        if not clean:
+            continue
+        end = marks[index + 1][0] if index + 1 < len(marks) else None
+        segments.append({"start": start, "end": end, "text": clean})
+
+    return segments
+
+
 class MediaProcessor:
     def __init__(self, model_id="bond005/whisper-podlodka-turbo", device=None):
         """загрузить whisper."""
@@ -24,6 +61,30 @@ class MediaProcessor:
 
     def transcribe(self, audio_path: str) -> str:
         """распознать аудио целиком и получить текст."""
+        generated_ids = self._generate(audio_path)
+        transcription = self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        return transcription.strip()
+
+    def transcribe_segments(self, audio_path: str) -> list[dict]:
+        """распознать аудио и получить фрагменты с отметками времени."""
+        generated_ids = self._generate(audio_path)
+        raw = self.processor.tokenizer.decode(
+            generated_ids[0], decode_with_timestamps=True,
+        )
+        segments = _parse_timestamped(raw)
+
+        if not segments:
+            fallback = self.processor.batch_decode(
+                generated_ids, skip_special_tokens=True,
+            )[0].strip()
+            if not fallback:
+                return []
+            return [{"start": None, "end": None, "text": fallback}]
+
+        return segments
+
+    def _generate(self, audio_path: str):
+        """прогнать аудио через whisper и вернуть токены."""
         if not os.path.exists(audio_path):
             raise FileNotFoundError(f"Аудиофайл '{audio_path}' не найден.")
 
@@ -58,8 +119,7 @@ class MediaProcessor:
             condition_on_prev_tokens=False
         ) # вообще можно поменять этот конфиг. но был подобран такой по умолчанию
 
-        transcription = self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
-        return transcription.strip()
+        return generated_ids
 
     def clean_text(self, text: str, bad_words_json_path: str) -> str:
         """заменить слова по json-файлу."""
@@ -87,7 +147,12 @@ class MediaProcessor:
             escaped_word = re.escape(word)
             # искать целые слова без учета регистра
             pattern = r'(?<!\w)' + escaped_word + r'(?!\w)'
-            text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+            text = re.sub(
+                pattern,
+                lambda m, r=replacement: _match_case(m.group(0), r),
+                text,
+                flags=re.IGNORECASE,
+            )
 
         # убрать лишние пробелы
         text = re.sub(r'\s{2,}', ' ', text)

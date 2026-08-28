@@ -63,6 +63,66 @@ def chunk_text(
     return chunks
 
 
+def chunk_segments(
+    segments: list[dict],
+    max_chunk_chars: int = 2000,
+    overlap_chars: int = 200,
+) -> list[dict]:
+    """разбить фрагменты whisper на чанки, сохраняя время."""
+    if not segments:
+        return []
+
+    chunks: list[dict] = []
+    current: list[dict] = []
+    current_len = 0
+
+    for segment in segments:
+        segment_len = len(segment["text"])
+
+        if current_len + segment_len > max_chunk_chars and current:
+            _finalize_segment_chunk(chunks, current)
+
+            overlap: list[dict] = []
+            overlap_len = 0
+            for s in reversed(current):
+                if overlap_len + len(s["text"]) <= overlap_chars:
+                    overlap.insert(0, s)
+                    overlap_len += len(s["text"])
+                else:
+                    break
+
+            current = overlap
+            current_len = overlap_len
+
+        current.append(segment)
+        current_len += segment_len
+
+    if current:
+        _finalize_segment_chunk(chunks, current)
+
+    logger.info(
+        "транскрипт разделен на %d фрагментов из %d сегментов",
+        len(chunks), len(segments),
+    )
+    return chunks
+
+
+def _finalize_segment_chunk(
+    chunks: list[dict],
+    segments: list[dict],
+) -> None:
+    """добавить готовый фрагмент с границами по времени."""
+    starts = [s["start"] for s in segments if s.get("start") is not None]
+    ends = [s["end"] for s in segments if s.get("end") is not None]
+
+    chunks.append({
+        "text": " ".join(s["text"] for s in segments),
+        "chunk_index": len(chunks),
+        "start_time": min(starts) if starts else None,
+        "end_time": max(ends) if ends else None,
+    })
+
+
 def _finalize_chunk(
     chunks: list[dict],
     sentences: list[str],
