@@ -31,6 +31,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const summaryContent  = document.getElementById('summary-content');
     const docsList        = document.getElementById('docs-list');
     const docsEmpty       = document.getElementById('docs-empty');
+    const uploadTitle     = document.getElementById('upload-title');
+    const mediaModal      = document.getElementById('media-modal');
+    const mediaClose      = document.getElementById('media-close');
+    const mediaTitle      = document.getElementById('media-title');
+    const mediaMeta       = document.getElementById('media-meta');
+    const mediaQuote      = document.getElementById('media-quote');
+    const playerSlot      = document.getElementById('player-slot');
 
     const coursesPanel   = document.getElementById('tab-courses');
     const coursesList    = document.getElementById('courses-list');
@@ -92,6 +99,115 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+
+    const closeMediaModal = () => {
+        mediaModal.classList.add('hidden');
+        playerSlot.innerHTML = '';
+    };
+
+    mediaClose.addEventListener('click', closeMediaModal);
+    mediaModal.addEventListener('click', (e) => {
+        if (e.target === mediaModal) closeMediaModal();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeMediaModal();
+    });
+
+    const openMediaAt = (source) => {
+        if (!source.doc_id || source.start_time === null || source.start_time === undefined) return;
+
+        mediaTitle.textContent = source.filename || 'Запись лекции';
+        mediaMeta.textContent = formatKindLabel(source.content_kind)
+            + (source.time_label ? ' · ' + source.time_label : '');
+        mediaQuote.textContent = source.text_preview || '';
+        mediaQuote.classList.toggle('hidden', !source.text_preview);
+
+        const isVideo = source.source_type === 'video';
+        const media = document.createElement(isVideo ? 'video' : 'audio');
+        media.className = isVideo ? 'player__video' : 'player__audio';
+        media.controls = true;
+        media.preload = 'metadata';
+        media.src = '/api/documents/' + source.doc_id + '/media#t=' + source.start_time;
+
+        media.addEventListener('loadedmetadata', () => {
+            try {
+                media.currentTime = source.start_time;
+            } catch (e) {
+                console.error('не удалось перемотать запись:', e);
+            }
+            media.play().catch(() => {});
+        });
+        media.addEventListener('error', () => {
+            playerSlot.innerHTML = '<p class="note">Запись этой лекции недоступна. Возможно, она загружена до появления этой возможности.</p>';
+        });
+
+        playerSlot.innerHTML = '';
+        playerSlot.appendChild(media);
+        mediaModal.classList.remove('hidden');
+    };
+
+    async function renameDocument(doc, item) {
+        const nameEl = item.querySelector('.doc__name');
+        if (!nameEl || item.querySelector('.doc__rename')) return;
+
+        const form = document.createElement('form');
+        form.className = 'doc__rename';
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'doc__rename-input';
+        input.value = doc.filename || '';
+        input.maxLength = 200;
+
+        const save = document.createElement('button');
+        save.type = 'submit';
+        save.className = 'doc__rename-save';
+        save.textContent = 'Сохранить';
+
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.className = 'doc__rename-cancel';
+        cancel.textContent = 'Отмена';
+
+        form.appendChild(input);
+        form.appendChild(save);
+        form.appendChild(cancel);
+
+        nameEl.classList.add('hidden');
+        nameEl.parentNode.insertBefore(form, nameEl);
+        input.focus();
+        input.select();
+
+        const restore = () => {
+            form.remove();
+            nameEl.classList.remove('hidden');
+        };
+
+        cancel.addEventListener('click', restore);
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const title = input.value.trim();
+            if (!title || title === doc.filename) {
+                restore();
+                return;
+            }
+            try {
+                const res = await fetch('/api/documents/' + doc.doc_id, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title }),
+                });
+                if (res.ok) {
+                    doc.filename = title;
+                    nameEl.textContent = title;
+                }
+            } catch (err) {
+                console.error('не удалось переименовать материал:', err);
+            }
+            restore();
+        });
+    }
+
     let currentCourseId = null;
     let coursesData = [];
 
@@ -141,7 +257,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const meta = document.createElement('p');
             meta.className = 'course__meta';
-            meta.textContent = course.document_count + ' материалов \u00b7 ' + course.chat_count + ' диалогов';
+            meta.textContent = course.document_count + ' материалов · ' + course.chat_count + ' диалогов';
 
             card.appendChild(title);
             card.appendChild(meta);
@@ -423,6 +539,17 @@ document.addEventListener('DOMContentLoaded', () => {
         return 'Материал';
     };
 
+    const formatSourceTail = (source) => {
+        const parts = [];
+        if (source.chunk_index !== undefined && source.chunk_index !== null) {
+            parts.push(`фрагмент #${source.chunk_index}`);
+        }
+        if (Number.isFinite(source.rerank_score)) {
+            parts.push(`релевантность ${source.rerank_score.toFixed(2)}`);
+        }
+        return parts.length ? ' · ' + parts.join(' · ') : '';
+    };
+
     const formatSourceMeta = (source) => {
         const parts = [formatKindLabel(source.content_kind)];
         if (source.time_label) {
@@ -511,7 +638,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 const meta = document.createElement('div');
                 meta.className = 'source__meta';
-                meta.textContent = formatSourceMeta(s);
+                if (s.time_label && s.start_time !== null && s.start_time !== undefined) {
+                    const before = document.createElement('span');
+                    before.textContent = formatKindLabel(s.content_kind) + ' · ';
+
+                    const jump = document.createElement('button');
+                    jump.type = 'button';
+                    jump.className = 'source__jump';
+                    jump.textContent = s.time_label;
+                    jump.title = 'Открыть запись на этом моменте';
+                    jump.addEventListener('click', () => openMediaAt(s));
+
+                    const after = document.createElement('span');
+                    after.textContent = formatSourceTail(s);
+
+                    meta.appendChild(before);
+                    meta.appendChild(jump);
+                    meta.appendChild(after);
+                } else {
+                    meta.textContent = formatSourceMeta(s);
+                }
 
                 const preview = document.createElement('div');
                 preview.className = 'source__preview';
@@ -672,6 +818,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const formData = new FormData();
         formData.append('file', file);
         if (currentCourseId) formData.append('course_id', currentCourseId);
+        const title = uploadTitle.value.trim();
+        if (title) formData.append('title', title);
 
         try {
             const res = await fetch('/api/upload', { method: 'POST', body: formData });
@@ -728,6 +876,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     progressBar.className = 'pipeline__bar pipeline__bar--done';
                     statusText.className = 'pipeline__status pipeline__status--done';
                     statusText.textContent = `Готово. Проиндексировано ${job.chunk_count} фрагментов.`;
+                    uploadTitle.value = '';
 
                     refreshDocuments();
                     return; // остановить проверку
@@ -784,12 +933,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 viewBtn.textContent = 'Открыть материал';
                 viewBtn.addEventListener('click', () => viewDocument(doc.doc_id));
 
+                const renameBtn = document.createElement('button');
+                renameBtn.className = 'doc__btn doc__btn--rename';
+                renameBtn.textContent = 'Переименовать';
+                renameBtn.addEventListener('click', () => renameDocument(doc, item));
+
                 const delBtn = document.createElement('button');
                 delBtn.className = 'doc__btn doc__btn--delete';
                 delBtn.textContent = 'Удалить';
                 delBtn.addEventListener('click', () => deleteDocument(doc.doc_id, item));
 
                 actions.appendChild(viewBtn);
+                actions.appendChild(renameBtn);
                 actions.appendChild(delBtn);
                 item.appendChild(actions);
                 docsList.appendChild(item);

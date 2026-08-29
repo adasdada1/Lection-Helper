@@ -33,6 +33,9 @@ def _init_db() -> None:
         if "checklist" not in columns:
             conn.execute("ALTER TABLE documents ADD COLUMN checklist TEXT")
             logger.info("добавили колонку checklist в documents")
+        if "media_path" not in columns:
+            conn.execute("ALTER TABLE documents ADD COLUMN media_path TEXT")
+            logger.info("добавили колонку media_path в documents")
 
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_documents_course_id "
@@ -55,6 +58,7 @@ def add_document(
     chunk_count_summary: int = 0,
     course_id: str | None = None,
     checklist: str | None = None,
+    media_path: str | None = None,
 ) -> None:
     """сохранить документ."""
     now = datetime.now().isoformat()
@@ -62,8 +66,9 @@ def add_document(
         conn.execute(
             """INSERT OR REPLACE INTO documents
                (doc_id, filename, source_type, transcript, full_summary, display_summary,
-                chunk_count_transcript, chunk_count_summary, created_at, course_id, checklist)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                chunk_count_transcript, chunk_count_summary, created_at, course_id,
+                checklist, media_path)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 doc_id,
                 filename,
@@ -76,6 +81,7 @@ def add_document(
                 now,
                 course_id,
                 checklist,
+                media_path,
             ),
         )
     logger.info("сохранили данные документа в SQLITE, doc_id=%s", doc_id)
@@ -92,7 +98,7 @@ def list_documents(course_id: str | None = None) -> list[dict]:
     """получить документы без больших текстов."""
     sql = (
         "SELECT doc_id, filename, source_type, chunk_count_transcript, "
-        "chunk_count_summary, created_at, course_id FROM documents"
+        "chunk_count_summary, created_at, course_id, media_path FROM documents"
     )
     params: list = []
     if course_id:
@@ -109,6 +115,40 @@ def list_documents(course_id: str | None = None) -> list[dict]:
         d["chunk_count"] = d["chunk_count_transcript"] + d["chunk_count_summary"]
         result.append(d)
     return result
+
+
+def rename_document(doc_id: str, title: str) -> bool:
+    """переименовать материал во всех хранилищах."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE documents SET filename = ? WHERE doc_id = ?", (title, doc_id),
+        )
+    if cur.rowcount == 0:
+        return False
+
+    from core.lexical_store import rename_document as rename_lexical
+    from core.vector_store import rename_document as rename_vectors
+
+    try:
+        rename_lexical(doc_id, title)
+    except Exception as e:
+        logger.warning("не переименовали материал в fts5: %s", e)
+    try:
+        rename_vectors(doc_id, title)
+    except Exception as e:
+        logger.warning("не переименовали материал в chromadb: %s", e)
+
+    logger.info("переименовали материал %s в '%s'", doc_id, title)
+    return True
+
+
+def get_media_path(doc_id: str) -> str | None:
+    """получить путь к исходному файлу материала."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT media_path FROM documents WHERE doc_id = ?", (doc_id,),
+        ).fetchone()
+    return row["media_path"] if row else None
 
 
 def delete_document(doc_id: str) -> bool:

@@ -186,6 +186,25 @@ def backfill_course_id() -> int:
     return len(ids_to_update)
 
 
+def rename_document(doc_id: str, title: str) -> int:
+    """обновить название материала в метаданных его фрагментов."""
+    collection = _get_collection()
+
+    data = collection.get(where={"doc_id": doc_id}, include=["metadatas"])
+    ids = data["ids"]
+    if not ids:
+        return 0
+
+    metadatas = []
+    for meta in data["metadatas"]:
+        updated = dict(meta)
+        updated["filename"] = title
+        metadatas.append(updated)
+
+    collection.update(ids=ids, metadatas=metadatas)
+    return len(ids)
+
+
 def delete_document(doc_id: str) -> int:
     """удалить фрагменты документа."""
     collection = _get_collection()

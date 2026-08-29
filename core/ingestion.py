@@ -31,11 +31,12 @@ class IngestJobManager:
     def __init__(self):
         self.jobs: dict[str, dict] = {}
 
-    def create_job(self, filename: str, course_id: str | None = None) -> str:
+    def create_job(self, filename: str, course_id: str | None = None,
+                   title: str | None = None) -> str:
         job_id = str(uuid.uuid4())
         self.jobs[job_id] = {
             "job_id": job_id,
-            "filename": filename,
+            "filename": title or filename,
             "course_id": course_id,
             "status": "pending",
             "stage": "Ожидание",
@@ -212,6 +213,7 @@ class IngestJobManager:
             add_document(
                 doc_id=doc_id,
                 filename=filename,
+                media_path=file_path,
                 source_type=source_type,
                 transcript=transcript,
                 checklist=checklist,
@@ -243,8 +245,6 @@ class IngestJobManager:
             )
 
         finally:
-            # удалить временные файлы
-            _safe_remove(file_path)
             if extracted_audio_path:
                 _safe_remove(extracted_audio_path)
 

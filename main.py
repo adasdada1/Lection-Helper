@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, BackgroundTasks
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 logging.basicConfig(level=logging.INFO)
@@ -25,6 +25,19 @@ job_manager = IngestJobManager()
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 course_store.ensure_default_course()
+
+
+def _remove_media(doc_id: str) -> None:
+    """удалить исходную запись лекции с диска."""
+    media_path = doc_store.get_media_path(doc_id)
+    if not media_path:
+        return
+    try:
+        if os.path.exists(media_path):
+            os.remove(media_path)
+            logger.info("удалили запись лекции %s", media_path)
+    except OSError as e:
+        logger.warning("не удалось удалить запись лекции: %s", e)
 
 
 # модели pydantic ---------------------------------------------------------------------------
@@ -49,6 +62,10 @@ class CreateCourseRequest(BaseModel):
 
 class RenameCourseRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=120)
+
+
+class RenameDocumentRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
 
 
 # фронтенд ---------------------------------------------------------------------------
@@ -111,6 +128,7 @@ async def delete_course(course_id: str):
 
     doc_ids = course_store.list_course_document_ids(course_id)
     for doc_id in doc_ids:
+        _remove_media(doc_id)
         _delete_vec(doc_id)
         _delete_lex(doc_id)
         _delete_sql(doc_id)
@@ -236,6 +254,7 @@ async def chat(req: ChatRequest):
 async def upload_file(
     file: UploadFile = File(...),
     course_id: str | None = Form(None),
+    title: str | None = Form(None),
     background_tasks: BackgroundTasks = BackgroundTasks(),
 ):
     """загрузить файл и начать обработку."""
@@ -260,7 +279,9 @@ async def upload_file(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка сохранения файла: {e}")
 
-    job_id = job_manager.create_job(file.filename, course_id=course_id)
+    job_id = job_manager.create_job(
+        file.filename, course_id=course_id, title=(title or "").strip() or None,
+    )
     background_tasks.add_task(job_manager.run, job_id, file_path)
 
     return {"job_id": job_id, "message": "Обработка запущена"}
@@ -292,6 +313,24 @@ async def get_document(doc_id: str):
     return {"document": doc}
 
 
+@app.patch("/api/documents/{doc_id}")
+async def rename_document(doc_id: str, req: RenameDocumentRequest):
+    """переименовать лекцию."""
+    title = req.title.strip()
+    if not doc_store.rename_document(doc_id, title):
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    return {"doc_id": doc_id, "filename": title}
+
+
+@app.get("/api/documents/{doc_id}/media")
+async def get_document_media(doc_id: str):
+    """отдать исходную запись лекции."""
+    media_path = doc_store.get_media_path(doc_id)
+    if not media_path or not os.path.exists(media_path):
+        raise HTTPException(status_code=404, detail="Запись лекции недоступна")
+    return FileResponse(media_path, filename=os.path.basename(media_path))
+
+
 @app.delete("/api/documents/{doc_id}")
 async def delete_document(doc_id: str):
     """удалить лекцию из всех хранилищ."""
@@ -299,7 +338,9 @@ async def delete_document(doc_id: str):
     from core.lexical_store import delete_document as _delete_lex
     from core.doc_store import delete_document as _delete_sql
     from core.chunk_times import delete_document as _delete_times
-    
+
+    _remove_media(doc_id)
+
     vec_deleted = _delete_vec(doc_id)
     lex_deleted = _delete_lex(doc_id)
     sql_deleted = _delete_sql(doc_id)

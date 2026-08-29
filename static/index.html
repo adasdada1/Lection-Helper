@@ -91,6 +91,10 @@
 
             <!-- область загрузки -->
             <div class="upload__section">
+                <label class="upload__title-field">
+                    <span class="upload__title-label">Название лекции</span>
+                    <input type="text" id="upload-title" class="upload__title-input" placeholder="Например: Лекция 1. Множества и логика" maxlength="200" autocomplete="off">
+                </label>
                 <div class="dropzone" id="drop-zone">
                     <svg class="dropzone__icon" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
                     <p class="dropzone__text">Перетащите файл сюда или</p>
@@ -131,6 +135,22 @@
                 <div id="docs-list" class="docs__list">
                     <p class="note" id="docs-empty">Нет загруженных материалов</p>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="media-modal" class="modal hidden">
+        <div class="modal__dialog modal__dialog--media">
+            <div class="modal__header">
+                <h3 class="modal__title" id="media-title">Запись лекции</h3>
+                <button id="media-close" class="modal__close" aria-label="Закрыть">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+            </div>
+            <div class="modal__body">
+                <div class="player" id="player-slot"></div>
+                <p class="player__meta" id="media-meta"></p>
+                <blockquote class="player__quote" id="media-quote"></blockquote>
             </div>
         </div>
     </div>

@@ -892,6 +892,144 @@ a:hover {
     margin: 0 auto;
 }
 
+.upload__title-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 12px;
+}
+
+.upload__title-label {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--primary);
+}
+
+.upload__title-input {
+    width: 100%;
+    padding: 12px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-md);
+    font-family: inherit;
+    font-size: 14px;
+    color: var(--text);
+    outline: none;
+    transition: border-color 0.16s ease;
+}
+
+.upload__title-input::placeholder {
+    color: var(--placeholder);
+}
+
+.upload__title-input:focus {
+    border-color: var(--primary);
+}
+
+.source__jump {
+    padding: 1px 7px;
+    background: var(--surface-tint);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-sm);
+    color: var(--primary);
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.16s ease, border-color 0.16s ease;
+}
+
+.source__jump:hover {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #FFFFFF;
+}
+
+.modal__dialog--media {
+    max-width: 720px;
+}
+
+.player {
+    display: flex;
+    justify-content: center;
+    background: var(--surface-soft);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: 12px;
+}
+
+.player__video {
+    width: 100%;
+    max-height: 55vh;
+    border-radius: var(--r-sm);
+}
+
+.player__audio {
+    width: 100%;
+}
+
+.player__meta {
+    margin-top: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--primary);
+}
+
+.player__quote {
+    margin-top: 10px;
+    padding: 14px 16px;
+    background: var(--surface-soft);
+    border-left: 3px solid var(--primary);
+    border-radius: 0 8px 8px 0;
+    font-size: 14px;
+    line-height: 1.55;
+    color: var(--text-body);
+}
+
+.doc__rename {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.doc__rename-input {
+    flex: 1;
+    min-width: 180px;
+    padding: 7px 10px;
+    background: var(--surface);
+    border: 1px solid var(--primary);
+    border-radius: var(--r-sm);
+    font-family: inherit;
+    font-size: 14px;
+    color: var(--text);
+    outline: none;
+}
+
+.doc__rename-save,
+.doc__rename-cancel {
+    padding: 7px 12px;
+    border-radius: var(--r-sm);
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.doc__rename-save {
+    background: var(--primary);
+    border: none;
+    color: #FFFFFF;
+}
+
+.doc__rename-cancel {
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    color: var(--text-body);
+}
+
 .dropzone {
     display: flex;
     flex-direction: column;

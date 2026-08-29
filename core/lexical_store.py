@@ -209,6 +209,18 @@ def search(
     return matches
 
 
+def rename_document(doc_id: str, title: str) -> int:
+    """обновить название материала у его фрагментов."""
+    if not _init_db():
+        return 0
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE lecture_chunks_fts SET filename = ? WHERE doc_id = ?",
+            (title, doc_id),
+        )
+    return cur.rowcount
+
+
 def delete_document(doc_id: str) -> int:
     if not _init_db():
         return 0
