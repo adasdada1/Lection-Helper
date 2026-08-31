@@ -70,18 +70,17 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 PRIMARY_MODEL = "minimax/minimax-m3:free"
 
 FALLBACK_MODELS = [
-    "nvidia/nemotron-3-ultra-550b-a55b:free",
     "z-ai/glm-5.2:free",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
     "google/gemma-4-31b-it:free",
-    "openai/gpt-oss-120b:free",
 ]
 
 SUMMARIZATION_MODELS = [
     "google/gemma-4-31b-it:free",
-    "openai/gpt-oss-20b:free",
-    "qwen/qwen3-next-80b-a3b-instruct:free",
+    "google/gemma-4-26b-a4b-it:free",
+    "poolside/laguna-s-2.1:free",
 ]
-TITLE_MODEL = "google/gemma-4-31b-it:free"
+TITLE_MODEL = "google/gemma-4-26b-a4b-it:free"
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 MAX_RETRIES = 10
 BACKOFF_BASE = 2.0

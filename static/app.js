@@ -779,7 +779,8 @@ document.addEventListener('DOMContentLoaded', () => {
     filePickerBtn.addEventListener('click', () => fileInput.click());
 
     fileInput.addEventListener('change', () => {
-        if (fileInput.files.length > 0) uploadFile(fileInput.files[0]);
+        if (fileInput.files.length > 0) enqueueFiles(fileInput.files);
+        fileInput.value = '';
     });
 
     dropZone.addEventListener('dragover', (e) => {
@@ -794,7 +795,7 @@ document.addEventListener('DOMContentLoaded', () => {
     dropZone.addEventListener('drop', (e) => {
         e.preventDefault();
         dropZone.classList.remove('dropzone--active');
-        if (e.dataTransfer.files.length > 0) uploadFile(e.dataTransfer.files[0]);
+        if (e.dataTransfer.files.length > 0) enqueueFiles(e.dataTransfer.files);
     });
 
     // нажатие на область открывает выбор файла
@@ -802,11 +803,51 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.target !== filePickerBtn) fileInput.click();
     });
 
-    // загрузка файла ====================================================================
-    async function uploadFile(file) {
+    // последовательная очередь загрузки =========================================================
+    const uploadQueue = [];
+    let uploadQueueRunning = false;
+    let uploadQueueCompleted = 0;
+
+    function enqueueFiles(fileList) {
+        const files = Array.from(fileList);
+        if (files.length === 0) return;
+
+        const customTitle = files.length === 1 ? uploadTitle.value.trim() : '';
+        files.forEach(file => uploadQueue.push({ file, title: customTitle }));
+        processUploadQueue();
+    }
+
+    async function processUploadQueue() {
+        if (uploadQueueRunning) return;
+
+        uploadQueueRunning = true;
+        uploadQueueCompleted = 0;
+
+        while (uploadQueue.length > 0) {
+            const item = uploadQueue.shift();
+            const position = uploadQueueCompleted + 1;
+            const total = position + uploadQueue.length;
+            await uploadFile(item.file, item.title, position, total);
+            uploadQueueCompleted += 1;
+        }
+
+        const processed = uploadQueueCompleted;
+        uploadQueueRunning = false;
+        uploadQueueCompleted = 0;
+        uploadTitle.value = '';
+        refreshDocuments();
+
+        if (processed > 1) {
+            statusText.textContent = `Очередь завершена. Обработано файлов: ${processed}.`;
+        }
+    }
+
+    async function uploadFile(file, title, position, total) {
         // показать ход обработки
         pipelineSection.classList.remove('hidden');
-        pipelineFilename.textContent = file.name;
+        pipelineFilename.textContent = total > 1
+            ? `${file.name} (${position} из ${total})`
+            : file.name;
         progressBar.style.setProperty('--pipeline-progress', '0%');
         progressBar.className = 'pipeline__bar';
         statusText.textContent = 'Загрузка файла…';
@@ -818,7 +859,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const formData = new FormData();
         formData.append('file', file);
         if (currentCourseId) formData.append('course_id', currentCourseId);
-        const title = uploadTitle.value.trim();
         if (title) formData.append('title', title);
 
         try {
@@ -831,26 +871,33 @@ document.addEventListener('DOMContentLoaded', () => {
                 statusText.className = 'pipeline__status pipeline__status--error';
                 progressBar.className = 'pipeline__bar pipeline__bar--error';
                 progressBar.style.setProperty('--pipeline-progress', '100%');
-                return;
+                return false;
             }
 
             const { job_id } = await res.json();
-            pollJobStatus(job_id);
+            return await pollJobStatus(job_id);
 
         } catch (err) {
             statusText.textContent = 'Ошибка сети при загрузке';
             statusText.className = 'pipeline__status pipeline__status--error';
             console.error(err);
+            return false;
         }
     }
 
     async function pollJobStatus(jobId) {
-        const poll = async () => {
-            try {
-                const res = await fetch(`/api/jobs/${jobId}`);
-                if (!res.ok) return;
+        return new Promise((resolve) => {
+            const poll = async () => {
+                try {
+                    const res = await fetch(`/api/jobs/${jobId}`);
+                    if (!res.ok) {
+                        statusText.textContent = 'Не удалось получить состояние обработки';
+                        statusText.className = 'pipeline__status pipeline__status--error';
+                        resolve(false);
+                        return;
+                    }
 
-                const job = await res.json();
+                    const job = await res.json();
 
                 progressBar.style.setProperty('--pipeline-progress', `${job.progress}%`);
                 statusText.textContent = job.stage;
@@ -876,9 +923,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     progressBar.className = 'pipeline__bar pipeline__bar--done';
                     statusText.className = 'pipeline__status pipeline__status--done';
                     statusText.textContent = `Готово. Проиндексировано ${job.chunk_count} фрагментов.`;
-                    uploadTitle.value = '';
 
                     refreshDocuments();
+                    resolve(true);
                     return; // остановить проверку
                 }
 
@@ -887,18 +934,20 @@ document.addEventListener('DOMContentLoaded', () => {
                     progressBar.style.setProperty('--pipeline-progress', '100%');
                     statusText.className = 'pipeline__status pipeline__status--error';
                     statusText.textContent = `Ошибка: ${job.error}`;
+                    resolve(false);
                     return; // остановить проверку
                 }
 
                 // обработка еще идет, проверить снова
                 setTimeout(poll, 2000);
 
-            } catch (err) {
-                console.error('ошибка проверки состояния:', err);
-                setTimeout(poll, 5000);
-            }
-        };
-        setTimeout(poll, 1500); // первая пауза
+                } catch (err) {
+                    console.error('ошибка проверки состояния:', err);
+                    setTimeout(poll, 5000);
+                }
+            };
+            setTimeout(poll, 1500); // первая пауза
+        });
     }
 
     // список документов ====================================================================

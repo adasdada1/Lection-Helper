@@ -92,14 +92,14 @@
             <!-- область загрузки -->
             <div class="upload__section">
                 <label class="upload__title-field">
-                    <span class="upload__title-label">Название лекции</span>
+                    <span class="upload__title-label">Название лекции (для одного файла)</span>
                     <input type="text" id="upload-title" class="upload__title-input" placeholder="Например: Лекция 1. Множества и логика" maxlength="200" autocomplete="off">
                 </label>
                 <div class="dropzone" id="drop-zone">
                     <svg class="dropzone__icon" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                    <p class="dropzone__text">Перетащите файл сюда или</p>
-                    <button type="button" class="dropzone__btn" id="file-picker-btn">Выберите файл</button>
-                    <input type="file" id="file-input" accept=".mp3,.wav,.m4a,.ogg,.flac,.aac,.wma,.mp4,.avi,.mkv,.mov,.webm,.flv,.wmv,.ts" hidden>
+                    <p class="dropzone__text">Перетащите файлы сюда или</p>
+                    <button type="button" class="dropzone__btn" id="file-picker-btn">Выберите файлы</button>
+                    <input type="file" id="file-input" accept=".mp3,.wav,.m4a,.ogg,.flac,.aac,.wma,.mp4,.avi,.mkv,.mov,.webm,.flv,.wmv,.ts" multiple hidden>
                     <span class="dropzone__hint">Аудио (mp3, wav, m4a…) или видео (mp4, avi, mkv, ts…)</span>
                 </div>
             </div>
