@@ -38,6 +38,49 @@ class LightweightChatTests(unittest.TestCase):
             doc_id="doc-1",
         )
 
+    def test_build_messages_uses_summary_as_auxiliary_context_only(self):
+        matches = [
+            {
+                "id": "summary-1",
+                "text": "Нормализованный ИИ-конспект объясняет назначение метода класса.",
+                "metadata": {
+                    "content_kind": "summary",
+                    "filename": "lecture.mp3",
+                    "chunk_index": 1,
+                },
+            },
+            {
+                "id": "transcript-1",
+                "text": "Метод класса получает ссылку на класс через параметр CLS.",
+                "metadata": {
+                    "content_kind": "transcript",
+                    "filename": "lecture.mp3",
+                    "chunk_index": 2,
+                },
+            },
+        ]
+        with (
+            patch.object(rag.chat_memory, "get_summary", return_value=None),
+            patch.object(rag.chat_memory, "get_recent_messages", return_value=[]),
+            patch("core.chunk_times.get_times", return_value={}),
+        ):
+            messages, evidence = rag._build_messages(
+                "Что такое метод класса?",
+                matches,
+                "chat-1",
+            )
+
+        context = messages[-1]["content"]
+        self.assertIn("Нормализованный ИИ-конспект", context)
+        self.assertIn("не источник доказательств", context)
+        self.assertIn("Метод класса получает ссылку", context)
+        self.assertEqual(list(evidence), ["T1"])
+        self.assertEqual(
+            evidence["T1"]["source"]["content_kind"],
+            "transcript",
+        )
+        self.assertNotIn("Нормализованный ИИ-конспект", evidence["T1"]["text"])
+
     def test_ask_skips_embedder_and_reranker_in_lightweight_mode(self):
         chat = {"chat_id": "chat-1", "course_id": "course-1", "title": "Чат"}
         with (

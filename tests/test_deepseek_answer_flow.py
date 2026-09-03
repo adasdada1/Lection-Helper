@@ -100,6 +100,58 @@ class DeepSeekAnswerFlowTests(unittest.TestCase):
         self.assertEqual(result["grounding_reason"], "provider down")
         self.assertEqual(generate.call_count, 1)
 
+    def test_provider_error_does_not_generate_title(self):
+        chat = dict(self.chat, title=rag.chat_memory.DEFAULT_CHAT_TITLE)
+        with (
+            patch.object(rag.chat_memory, "get_chat", return_value=chat),
+            patch.object(rag.chat_memory, "add_message"),
+            patch.object(rag.chat_memory, "maybe_summarize"),
+            patch.object(rag.chat_memory, "get_message_count", return_value=2),
+            patch.object(rag.chat_memory, "generate_chat_title") as title,
+            patch.object(
+                rag,
+                "_load_short_scoped_transcript",
+                return_value=[{"id": "c1"}],
+            ),
+            patch.object(
+                rag,
+                "_build_messages",
+                return_value=([{"role": "user", "content": "q"}], self.evidence),
+            ),
+            patch.object(rag, "call_llm_for_answer", side_effect=RuntimeError("down")),
+        ):
+            result = asyncio.run(
+                rag.ask("Что такое класс?", "chat-1", scope_doc_id="doc-1")
+            )
+
+        self.assertEqual(result["grounding_status"], "provider_error")
+        title.assert_not_called()
+
+    def test_no_thinking_fallback_usage_includes_failed_low_call(self):
+        result, _, _, _ = self.ask([{
+            "answer": self.valid_answer,
+            "model": "deepseek-v4-flash",
+            "usage": {"prompt_tokens": 1000, "completion_tokens": 200},
+            "estimated_cost_upper_usd": 0.000704,
+            "prior_results": [{
+                "answer": "",
+                "model": "deepseek-v4-flash",
+                "usage": {"prompt_tokens": 3000, "completion_tokens": 4096},
+                "estimated_cost_upper_usd": 0.006727,
+            }],
+            "generation_mode": "no_thinking_after_length",
+        }])
+
+        self.assertEqual(result["deepseek_usage"]["calls"], 2)
+        self.assertEqual(
+            result["deepseek_usage"]["details"][0]["operation"],
+            "failed_answer_generation",
+        )
+        self.assertEqual(
+            result["deepseek_usage"]["details"][1]["operation"],
+            "answer_generation_no_thinking_fallback",
+        )
+
     def test_paid_failed_completion_keeps_usage_telemetry(self):
         failure = DeepSeekCompletionError(
             "finish_reason=length",
@@ -202,12 +254,26 @@ class DeepSeekAnswerFlowTests(unittest.TestCase):
             {"id": "c1", "text": "a" * 100, "metadata": {}},
             {"id": "c2", "text": "b" * 100, "metadata": {}},
         ]
+        summaries = [
+            {
+                "id": "s1",
+                "text": "нормализованный конспект",
+                "metadata": {"content_kind": "summary"},
+            },
+        ]
+
+        def load_chunks(_doc_id, content_kind):
+            return chunks if content_kind == "transcript" else summaries
+
         with (
-            patch.object(rag, "list_chunks", return_value=chunks),
+            patch.object(rag, "list_chunks", side_effect=load_chunks),
             patch.object(rag, "SHORT_LECTURE_MAX_CHUNKS", 2),
             patch.object(rag, "SHORT_LECTURE_MAX_CHARS", 200),
         ):
-            self.assertEqual(rag._load_short_scoped_transcript("doc-1"), chunks)
+            self.assertEqual(
+                rag._load_short_scoped_transcript("doc-1"),
+                chunks + summaries,
+            )
 
         with (
             patch.object(rag, "list_chunks", return_value=chunks),

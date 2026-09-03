@@ -13,17 +13,25 @@ class ValidationLlmTests(unittest.TestCase):
             "additionalProperties": False,
         }
 
-    def json_response(self, content='{"items": []}'):
+    def json_response(
+        self,
+        content='{"items": []}',
+        finish_reason="stop",
+        completion_tokens=100,
+    ):
         response = Mock()
         response.status_code = 200
         response.raise_for_status.return_value = None
         response.json.return_value = {
             "model": "deepseek-v4-flash",
             "choices": [{
-                "finish_reason": "stop",
+                "finish_reason": finish_reason,
                 "message": {"content": content},
             }],
-            "usage": {"prompt_tokens": 1000, "completion_tokens": 100},
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": completion_tokens,
+            },
         }
         return response
 
@@ -76,6 +84,46 @@ class ValidationLlmTests(unittest.TestCase):
         self.assertEqual(
             payload["reasoning_effort"],
             llm.DEEPSEEK_VALIDATION_REASONING_EFFORT,
+        )
+
+    def test_answer_falls_back_without_thinking_after_length(self):
+        with (
+            patch.object(deepseek_client, "DEEPSEEK_API_KEY", "test-key"),
+            patch.object(
+                deepseek_client.requests,
+                "post",
+                side_effect=[
+                    self.json_response(
+                        "",
+                        finish_reason="length",
+                        completion_tokens=4096,
+                    ),
+                    self.json_response(),
+                ],
+            ) as post,
+        ):
+            result = llm.call_llm_for_answer(
+                [{"role": "user", "content": "{}"}],
+                self.schema,
+            )
+
+        first_payload = post.call_args_list[0].kwargs["json"]
+        fallback_payload = post.call_args_list[1].kwargs["json"]
+        self.assertEqual(first_payload["thinking"], {"type": "enabled"})
+        self.assertEqual(
+            first_payload["max_tokens"],
+            llm.DEEPSEEK_ANSWER_MAX_TOKENS,
+        )
+        self.assertEqual(fallback_payload["thinking"], {"type": "disabled"})
+        self.assertNotIn("reasoning_effort", fallback_payload)
+        self.assertEqual(
+            fallback_payload["max_tokens"],
+            llm.DEEPSEEK_ANSWER_FALLBACK_MAX_TOKENS,
+        )
+        self.assertEqual(result["generation_mode"], "no_thinking_after_length")
+        self.assertEqual(
+            result["prior_results"][0]["usage"]["completion_tokens"],
+            4096,
         )
 
     def test_invalid_json_output_is_rejected(self):

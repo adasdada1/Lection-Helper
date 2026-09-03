@@ -136,11 +136,12 @@ cp .env.example .env
 OPENROUTER_API_KEY=your_openrouter_key_here
 DEEPSEEK_API_KEY=your_direct_deepseek_key_here
 DEEPSEEK_MODEL=deepseek-v4-flash
-DEEPSEEK_REASONING_EFFORT=low
+DEEPSEEK_REASONING_EFFORT=medium
 DEEPSEEK_VALIDATION_REASONING_EFFORT=medium
 DEEPSEEK_MAX_RETRIES=2
-DEEPSEEK_ANSWER_MAX_TOKENS=8192
-DEEPSEEK_VALIDATION_MAX_TOKENS=4096
+DEEPSEEK_ANSWER_MAX_TOKENS=16384
+DEEPSEEK_ANSWER_FALLBACK_MAX_TOKENS=2048
+DEEPSEEK_VALIDATION_MAX_TOKENS=8192
 SHORT_LECTURE_MAX_CHUNKS=8
 SHORT_LECTURE_MAX_CHARS=32000
 RERANKER_BATCH_SIZE=4
@@ -150,8 +151,13 @@ RERANKER_BATCH_SIZE=4
 `deepseek-v4-flash` в thinking mode с JSON Output и локальной строгой
 проверкой схемы. Конспект и чек-лист создаются через OpenRouter моделями MiniMax, GLM и Nemotron.
 Заголовки чатов и сжатие истории используют бесплатный пул Gemma и Laguna.
+При ответе DeepSeek получает транскрипционные фрагменты и релевантные ИИ-конспекты.
+ИИ-конспекты используются как нормализованный вспомогательный контекст, но все
+итоговые тезисы и цитаты должны подтверждаться только транскриптом. Основная
+генерация работает с `reasoning_effort=medium`; если она исчерпывает заданный
+лимит токенов, выполняется один резервный JSON-вызов без Thinking.
 Для выбранной короткой лекции в контекст передаются все транскрипционные
-фрагменты, если они укладываются в указанные лимиты.
+фрагменты и её ИИ-конспект, если транскрипт укладывается в указанные лимиты.
 
 Запуск:
 

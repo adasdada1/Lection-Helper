@@ -95,7 +95,9 @@ async def ask(
     if evidence_sources:
         try:
             result = call_llm_for_answer(messages, answer_json_schema())
-            deepseek_calls.append(_usage_record(result, "answer_generation"))
+            deepseek_calls.extend(
+                _generation_usage_records(result, "answer_generation")
+            )
             model = result.get("model")
             grounded = _ground_generated_answer(
                 result["answer"], evidence_sources, question,
@@ -113,7 +115,9 @@ async def ask(
                     ),
                     answer_json_schema(),
                 )
-                deepseek_calls.append(_usage_record(retry_result, "targeted_retry"))
+                deepseek_calls.extend(
+                    _generation_usage_records(retry_result, "targeted_retry")
+                )
                 model = retry_result.get("model")
                 grounded = _ground_generated_answer(
                     retry_result["answer"], evidence_sources, question,
@@ -176,7 +180,14 @@ async def ask(
     # 8. создать заголовок
     msg_count = chat_memory.get_message_count(chat_id)
     chat_data = chat_memory.get_chat(chat_id)
-    if msg_count == 2 and chat_data and chat_data["title"] == chat_memory.DEFAULT_CHAT_TITLE:
+    if (
+        grounding_status in {
+            "supported", "supported_partial", "supported_after_retry",
+        }
+        and msg_count == 2
+        and chat_data
+        and chat_data["title"] == chat_memory.DEFAULT_CHAT_TITLE
+    ):
         try:
             chat_memory.generate_chat_title(chat_id)
         except Exception as e:
@@ -194,15 +205,18 @@ async def ask(
 
 
 def _load_short_scoped_transcript(doc_id: str) -> list[dict] | None:
-    chunks = list_chunks(doc_id, content_kind="transcript")
-    if not chunks:
+    transcript_chunks = list_chunks(doc_id, content_kind="transcript")
+    if not transcript_chunks:
         return None
-    total_chars = sum(len(chunk.get("text", "")) for chunk in chunks)
+    total_chars = sum(
+        len(chunk.get("text", "")) for chunk in transcript_chunks
+    )
     if (
-        len(chunks) <= SHORT_LECTURE_MAX_CHUNKS
+        len(transcript_chunks) <= SHORT_LECTURE_MAX_CHUNKS
         and total_chars <= SHORT_LECTURE_MAX_CHARS
     ):
-        return chunks
+        summary_chunks = list_chunks(doc_id, content_kind="summary")
+        return transcript_chunks + summary_chunks
     return None
 
 
@@ -259,6 +273,19 @@ def _usage_record(result: dict, operation: str) -> dict:
             result.get("estimated_cost_upper_usd") or 0.0
         ),
     }
+
+
+def _generation_usage_records(result: dict, operation: str) -> list[dict]:
+    records = [
+        _usage_record(prior, f"failed_{operation}")
+        for prior in result.get("prior_results", [])
+        if isinstance(prior, dict)
+    ]
+    actual_operation = operation
+    if result.get("generation_mode") == "no_thinking_after_length":
+        actual_operation = f"{operation}_no_thinking_fallback"
+    records.append(_usage_record(result, actual_operation))
+    return records
 
 
 def _summarize_usage(calls: list[dict]) -> dict:
@@ -475,7 +502,14 @@ def _build_messages(
     evidence_sources = {}
     matches = [
         match for match in _clean_matches(matches)
-        if match.get("metadata", {}).get("content_kind") == "transcript"
+    ]
+    transcript_matches = [
+        match for match in matches
+        if match.get("metadata", {}).get("content_kind") != "summary"
+    ]
+    summary_matches = [
+        match for match in matches
+        if match.get("metadata", {}).get("content_kind") == "summary"
     ]
 
     # системный промпт
@@ -502,13 +536,13 @@ def _build_messages(
         messages.append({"role": msg["role"], "content": msg["content"]})
 
     # вопрос с rag-контекстом
-    if matches:
+    if transcript_matches or summary_matches:
         from core.chunk_times import get_times, format_range
 
-        times = get_times([match.get("id") for match in matches])
+        times = get_times([match.get("id") for match in transcript_matches])
 
         context_parts = []
-        for i, match in enumerate(matches):
+        for i, match in enumerate(transcript_matches):
             meta = match["metadata"]
             source_id = f"T{i + 1}"
 
@@ -543,6 +577,16 @@ def _build_messages(
                 "text": match["text"],
                 "source": source,
             }
+
+        for match in summary_matches:
+            meta = match["metadata"]
+            label = (
+                "Вспомогательный ИИ-конспект [нормализованный контекст, "
+                "не источник доказательств] "
+                f"(из \"{meta.get('filename', 'материал')}\", "
+                f"чанк #{meta.get('chunk_index')})"
+            )
+            context_parts.append(f"--- {label} ---\n{match['text']}")
 
         context_block = "\n\n".join(context_parts)
         guidance = _question_guidance(question)

@@ -6,6 +6,7 @@ import requests
 
 from core.config import (
     BACKOFF_BASE,
+    DEEPSEEK_ANSWER_FALLBACK_MAX_TOKENS,
     DEEPSEEK_ANSWER_MAX_TOKENS,
     DEEPSEEK_REASONING_EFFORT,
     DEEPSEEK_VALIDATION_MAX_TOKENS,
@@ -16,7 +17,7 @@ from core.config import (
     PRIMARY_MODEL,
     UTILITY_MODELS,
 )
-from core.deepseek_client import call_deepseek_structured
+from core.deepseek_client import DeepSeekCompletionError, call_deepseek_structured
 
 logger = logging.getLogger(__name__)
 
@@ -25,14 +26,33 @@ def call_llm_for_answer(
     messages: list[dict],
     schema: dict,
 ) -> dict:
-    return call_deepseek_structured(
-        messages,
-        schema_name="grounded_lecture_answer",
-        schema=schema,
-        max_tokens=DEEPSEEK_ANSWER_MAX_TOKENS,
-        reasoning_effort=DEEPSEEK_REASONING_EFFORT,
-        operation="генерация ответа",
-    )
+    try:
+        return call_deepseek_structured(
+            messages,
+            schema_name="grounded_lecture_answer",
+            schema=schema,
+            max_tokens=DEEPSEEK_ANSWER_MAX_TOKENS,
+            reasoning_effort=DEEPSEEK_REASONING_EFFORT,
+            operation="генерация ответа",
+        )
+    except DeepSeekCompletionError as exc:
+        if "finish_reason=length" not in str(exc):
+            raise
+        logger.warning(
+            "thinking исчерпал лимит, выполняем один короткий fallback без thinking"
+        )
+        result = call_deepseek_structured(
+            messages,
+            schema_name="grounded_lecture_answer",
+            schema=schema,
+            max_tokens=DEEPSEEK_ANSWER_FALLBACK_MAX_TOKENS,
+            reasoning_effort=DEEPSEEK_REASONING_EFFORT,
+            operation="резервная генерация ответа",
+            thinking_enabled=False,
+        )
+        result["prior_results"] = [exc.result]
+        result["generation_mode"] = "no_thinking_after_length"
+        return result
 
 # открытые функции ---------------------------------------------------------------------------
 def call_llm(messages: list[dict]) -> dict:

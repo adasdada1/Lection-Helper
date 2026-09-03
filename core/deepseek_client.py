@@ -38,6 +38,7 @@ def call_deepseek_structured(
     max_tokens: int,
     reasoning_effort: str,
     operation: str,
+    thinking_enabled: bool = True,
 ) -> dict:
     if not DEEPSEEK_API_KEY:
         raise RuntimeError("DEEPSEEK_API_KEY не настроен в .env")
@@ -48,6 +49,7 @@ def call_deepseek_structured(
         max_tokens,
         reasoning_effort,
         operation,
+        thinking_enabled,
     )
 
 
@@ -63,11 +65,13 @@ def _call_json_output(
     max_tokens: int,
     reasoning_effort: str,
     operation: str,
+    thinking_enabled: bool,
 ) -> dict:
     payload = _base_payload(
         _with_json_instruction(messages, schema_name, schema),
         max_tokens,
         reasoning_effort,
+        thinking_enabled,
     )
     payload["response_format"] = {"type": "json_object"}
     data = _post_with_retries(
@@ -97,15 +101,20 @@ def _base_payload(
     messages: list[dict],
     max_tokens: int,
     reasoning_effort: str,
+    thinking_enabled: bool,
 ) -> dict:
-    return {
+    payload = {
         "model": DEEPSEEK_MODEL,
         "messages": messages,
-        "thinking": {"type": "enabled"},
-        "reasoning_effort": reasoning_effort,
         "max_tokens": max_tokens,
         "stream": False,
     }
+    payload["thinking"] = {
+        "type": "enabled" if thinking_enabled else "disabled",
+    }
+    if thinking_enabled:
+        payload["reasoning_effort"] = reasoning_effort
+    return payload
 
 
 def _post_with_retries(
