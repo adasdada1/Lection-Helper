@@ -20,6 +20,7 @@ from core.config import (
     UPLOAD_DIR,
     VIDEO_EXTENSIONS,
 )
+from core.model_runtime import LOCAL_MODEL_LOCK
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,12 @@ class IngestJobManager:
 
     def get_status(self, job_id: str) -> dict | None:
         return self.jobs.get(job_id)
+
+    def has_active_job(self) -> bool:
+        return any(
+            job.get("status") in {"pending", "processing"}
+            for job in self.jobs.values()
+        )
 
     # служебные методы ------------------------------------------------------------------
     def _update(self, job_id: str, **kwargs):
@@ -91,31 +98,37 @@ class IngestJobManager:
                 progress=10,
                 transcription={"active": True},
             )
-            from core.transcriber import MediaProcessor
-            processor = MediaProcessor()  # здесь загрузится whisper
+            with LOCAL_MODEL_LOCK:
+                from core.transcriber import MediaProcessor
+                processor = None
+                try:
+                    processor = MediaProcessor()
+                    segments = processor.transcribe_segments(audio_path)
+                    self._update(job_id, transcription=None)
+                    logger.info(
+                        "транскрипция готова, сегментов: %d, с отметками времени: %d",
+                        len(segments),
+                        sum(1 for s in segments if s.get("start") is not None),
+                    )
 
-            segments = processor.transcribe_segments(audio_path)
-            self._update(job_id, transcription=None)
-            logger.info(
-                "транскрипция готова, сегментов: %d, с отметками времени: %d",
-                len(segments),
-                sum(1 for s in segments if s.get("start") is not None),
-            )
+                    raw_transcript = " ".join(
+                        segment["text"] for segment in segments
+                    ).strip()
+                    self._update(job_id, raw_transcript=raw_transcript)
 
-            # 3. очистить текст
-            self._update(job_id, stage="Очистка текста", progress=40)
-            bad_words_path = "bad_words.json"
-            if os.path.exists(bad_words_path):
-                for segment in segments:
-                    segment["text"] = processor.clean_text(segment["text"], bad_words_path)
-                segments = [s for s in segments if s["text"]]
-                logger.info("очистили текст по bad_words.json")
+                    self._update(job_id, stage="Очистка текста", progress=40)
+                    bad_words_path = "bad_words.json"
+                    if os.path.exists(bad_words_path):
+                        for segment in segments:
+                            segment["text"] = processor.clean_text(segment["text"], bad_words_path)
+                        segments = [s for s in segments if s["text"]]
+                        logger.info("очистили текст по bad_words.json")
 
-            transcript = " ".join(s["text"] for s in segments).strip()
-            self._update(job_id, transcript=transcript)
-
-            del processor
-            _free_gpu()
+                    transcript = " ".join(s["text"] for s in segments).strip()
+                    self._update(job_id, transcript=transcript)
+                finally:
+                    processor = None
+                    _free_gpu()
             logger.info("выгрузили whisper из видеопамяти")
 
             # 4. сделать чек-лист
@@ -168,10 +181,11 @@ class IngestJobManager:
 
             # 7. создать векторы
             self._update(job_id, stage="Создание эмбеддингов (BGE-M3)", progress=80)
-            from core.embeddings import get_embedder
-            embedder = get_embedder()
-            texts = [c["text"] for c in chunks]
-            embeddings = embedder.embed_documents(texts)
+            with LOCAL_MODEL_LOCK:
+                from core.embeddings import get_embedder
+                embedder = get_embedder()
+                texts = [c["text"] for c in chunks]
+                embeddings = embedder.embed_documents(texts)
             logger.info("посчитали векторы: %d", len(embeddings))
 
             # 8. сохранить в базы
@@ -216,6 +230,7 @@ class IngestJobManager:
                 media_path=file_path,
                 source_type=source_type,
                 transcript=transcript,
+                raw_transcript=raw_transcript,
                 checklist=checklist,
                 full_summary=full_summary_with_metadata,
                 display_summary=display_summary,

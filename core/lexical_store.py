@@ -209,6 +209,40 @@ def search(
     return matches
 
 
+def list_chunks(
+    doc_id: str,
+    content_kind: str = "transcript",
+) -> list[dict]:
+    if not _init_db():
+        return []
+
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT chunk_id, doc_id, course_id, filename, source_type, "
+            "content_kind, chunk_index, text FROM lecture_chunks_fts "
+            "WHERE doc_id = ? AND content_kind = ? "
+            "ORDER BY CAST(chunk_index AS INTEGER)",
+            (doc_id, content_kind),
+        ).fetchall()
+
+    return [
+        {
+            "id": row["chunk_id"],
+            "text": row["text"],
+            "metadata": {
+                "doc_id": row["doc_id"],
+                "course_id": row["course_id"],
+                "filename": row["filename"],
+                "source_type": row["source_type"],
+                "content_kind": row["content_kind"],
+                "chunk_index": row["chunk_index"],
+            },
+            "distance": 0.0,
+        }
+        for row in rows
+    ]
+
+
 def rename_document(doc_id: str, title: str) -> int:
     """обновить название материала у его фрагментов."""
     if not _init_db():

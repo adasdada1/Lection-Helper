@@ -1,4 +1,4 @@
-"""запросы к openrouter с запасными моделями."""
+"""запросы к внешним LLM-провайдерам."""
 
 import time
 import logging
@@ -6,17 +6,33 @@ import requests
 
 from core.config import (
     BACKOFF_BASE,
+    DEEPSEEK_ANSWER_MAX_TOKENS,
+    DEEPSEEK_REASONING_EFFORT,
+    DEEPSEEK_VALIDATION_MAX_TOKENS,
+    DEEPSEEK_VALIDATION_REASONING_EFFORT,
     FALLBACK_MODELS,
-    MAX_RETRIES,
     OPENROUTER_API_KEY,
     OPENROUTER_URL,
     PRIMARY_MODEL,
-    RETRYABLE_STATUS_CODES,
-    SUMMARIZATION_MODELS,
-    TITLE_MODEL,
+    UTILITY_MODELS,
 )
+from core.deepseek_client import call_deepseek_structured
 
 logger = logging.getLogger(__name__)
+
+
+def call_llm_for_answer(
+    messages: list[dict],
+    schema: dict,
+) -> dict:
+    return call_deepseek_structured(
+        messages,
+        schema_name="grounded_lecture_answer",
+        schema=schema,
+        max_tokens=DEEPSEEK_ANSWER_MAX_TOKENS,
+        reasoning_effort=DEEPSEEK_REASONING_EFFORT,
+        operation="генерация ответа",
+    )
 
 # открытые функции ---------------------------------------------------------------------------
 def call_llm(messages: list[dict]) -> dict:
@@ -29,7 +45,7 @@ def call_llm(messages: list[dict]) -> dict:
         "Content-Type": "application/json",
     }
     all_models = [PRIMARY_MODEL] + FALLBACK_MODELS
-    total_attempts = max(MAX_RETRIES, len(all_models))
+    total_attempts = len(all_models)
 
     last_error_msg: str | None = None
 
@@ -111,6 +127,20 @@ def call_llm(messages: list[dict]) -> dict:
     )
 
 
+def call_llm_for_validation(
+    messages: list[dict],
+    schema: dict,
+) -> dict:
+    return call_deepseek_structured(
+        messages,
+        schema_name="claim_validation",
+        schema=schema,
+        max_tokens=DEEPSEEK_VALIDATION_MAX_TOKENS,
+        reasoning_effort=DEEPSEEK_VALIDATION_REASONING_EFFORT,
+        operation="проверка доказательств",
+    )
+
+
 # сжатие истории ---------------------------------------------------------------------------
 def call_llm_for_summarization(messages: list[dict]) -> dict:
     """создать сводку через OPENROUTER."""
@@ -122,8 +152,7 @@ def call_llm_for_summarization(messages: list[dict]) -> dict:
         "Content-Type": "application/json",
     }
 
-    # сначала модели для сводки, затем модели чата
-    all_models = SUMMARIZATION_MODELS + [PRIMARY_MODEL] + FALLBACK_MODELS
+    all_models = UTILITY_MODELS
     total_attempts = len(all_models)
 
     last_error_msg: str | None = None
@@ -210,7 +239,7 @@ def call_llm_for_title(messages: list[dict]) -> dict:
         "Content-Type": "application/json",
     }
 
-    all_models = [TITLE_MODEL, PRIMARY_MODEL] + FALLBACK_MODELS
+    all_models = UTILITY_MODELS
     total_attempts = len(all_models)
     last_error_msg: str | None = None
 

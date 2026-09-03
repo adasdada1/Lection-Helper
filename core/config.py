@@ -72,15 +72,32 @@ PRIMARY_MODEL = "minimax/minimax-m3:free"
 FALLBACK_MODELS = [
     "z-ai/glm-5.2:free",
     "nvidia/nemotron-3-ultra-550b-a55b:free",
-    "google/gemma-4-31b-it:free",
 ]
 
-SUMMARIZATION_MODELS = [
+UTILITY_MODELS = [
     "google/gemma-4-31b-it:free",
     "google/gemma-4-26b-a4b-it:free",
     "poolside/laguna-s-2.1:free",
 ]
-TITLE_MODEL = "google/gemma-4-26b-a4b-it:free"
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
-MAX_RETRIES = 10
 BACKOFF_BASE = 2.0
+
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+DEEPSEEK_API_URL = os.getenv(
+    "DEEPSEEK_API_URL",
+    "https://api.deepseek.com/chat/completions",
+)
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+DEEPSEEK_REASONING_EFFORT = os.getenv(
+    "DEEPSEEK_REASONING_EFFORT", "low",
+)
+DEEPSEEK_VALIDATION_REASONING_EFFORT = os.getenv(
+    "DEEPSEEK_VALIDATION_REASONING_EFFORT", "medium",
+)
+DEEPSEEK_MAX_RETRIES = env_int("DEEPSEEK_MAX_RETRIES", 2)
+DEEPSEEK_ANSWER_MAX_TOKENS = env_int("DEEPSEEK_ANSWER_MAX_TOKENS", 8192)
+DEEPSEEK_VALIDATION_MAX_TOKENS = env_int(
+    "DEEPSEEK_VALIDATION_MAX_TOKENS", 4096,
+)
+SHORT_LECTURE_MAX_CHUNKS = env_int("SHORT_LECTURE_MAX_CHUNKS", 8)
+SHORT_LECTURE_MAX_CHARS = env_int("SHORT_LECTURE_MAX_CHARS", 32_000)

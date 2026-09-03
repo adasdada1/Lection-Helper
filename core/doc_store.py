@@ -16,6 +16,7 @@ def _init_db() -> None:
                 filename        TEXT NOT NULL,
                 source_type     TEXT NOT NULL,
                 transcript      TEXT,
+                raw_transcript  TEXT,
                 full_summary    TEXT,
                 display_summary TEXT,
                 chunk_count_transcript INTEGER DEFAULT 0,
@@ -36,6 +37,9 @@ def _init_db() -> None:
         if "media_path" not in columns:
             conn.execute("ALTER TABLE documents ADD COLUMN media_path TEXT")
             logger.info("добавили колонку media_path в documents")
+        if "raw_transcript" not in columns:
+            conn.execute("ALTER TABLE documents ADD COLUMN raw_transcript TEXT")
+            logger.info("добавили колонку raw_transcript в documents")
 
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_documents_course_id "
@@ -59,21 +63,24 @@ def add_document(
     course_id: str | None = None,
     checklist: str | None = None,
     media_path: str | None = None,
+    raw_transcript: str | None = None,
 ) -> None:
     """сохранить документ."""
     now = datetime.now().isoformat()
     with _connect() as conn:
         conn.execute(
             """INSERT OR REPLACE INTO documents
-               (doc_id, filename, source_type, transcript, full_summary, display_summary,
+               (doc_id, filename, source_type, transcript, raw_transcript,
+                full_summary, display_summary,
                 chunk_count_transcript, chunk_count_summary, created_at, course_id,
                 checklist, media_path)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 doc_id,
                 filename,
                 source_type,
                 transcript,
+                raw_transcript,
                 full_summary,
                 display_summary,
                 chunk_count_transcript,

@@ -235,10 +235,16 @@ async def chat(req: ChatRequest):
         raise HTTPException(status_code=404, detail="Чат не найден")
 
     try:
+        local_models_busy = job_manager.has_active_job()
+        if local_models_busy:
+            logger.info(
+                "обработка лекции активна, чат использует лексический поиск"
+            )
         result = await ask(
             req.message,
             chat_id=req.chat_id,
             scope_doc_id=req.scope_doc_id,
+            use_local_models=not local_models_busy,
         )
         # вернуть обновленный заголовок
         chat_data = get_chat(req.chat_id)
@@ -246,6 +252,12 @@ async def chat(req: ChatRequest):
         return result
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
+    except Exception:
+        logger.exception("необработанная ошибка при ответе в чате %s", req.chat_id)
+        raise HTTPException(
+            status_code=500,
+            detail="Не удалось обработать вопрос. Попробуйте отправить его ещё раз.",
+        )
 
 
 # загрузка ---------------------------------------------------------------------------
