@@ -36,6 +36,7 @@ class DeepSeekAnswerFlowTests(unittest.TestCase):
 
     def ask(self, answers):
         with (
+            patch.object(rag, "GROUNDING_MODE", "strict"),
             patch.object(rag.chat_memory, "get_chat", return_value=self.chat),
             patch.object(rag.chat_memory, "add_message"),
             patch.object(rag.chat_memory, "maybe_summarize"),
@@ -103,6 +104,7 @@ class DeepSeekAnswerFlowTests(unittest.TestCase):
     def test_provider_error_does_not_generate_title(self):
         chat = dict(self.chat, title=rag.chat_memory.DEFAULT_CHAT_TITLE)
         with (
+            patch.object(rag, "GROUNDING_MODE", "strict"),
             patch.object(rag.chat_memory, "get_chat", return_value=chat),
             patch.object(rag.chat_memory, "add_message"),
             patch.object(rag.chat_memory, "maybe_summarize"),

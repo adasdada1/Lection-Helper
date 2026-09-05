@@ -23,6 +23,11 @@ def env_int(name: str, default: int) -> int:
         return default
 
 
+def env_reasoning(name: str, default: str) -> str:
+    value = os.getenv(name, default).strip().casefold()
+    return value if value in {"low", "medium"} else default
+
+
 # файлы и хранилища
 DATA_DIR = BASE_DIR / "data"
 UPLOAD_DIR = str(BASE_DIR / "uploads")
@@ -88,10 +93,10 @@ DEEPSEEK_API_URL = os.getenv(
     "https://api.deepseek.com/chat/completions",
 )
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
-DEEPSEEK_REASONING_EFFORT = os.getenv(
+DEEPSEEK_REASONING_EFFORT = env_reasoning(
     "DEEPSEEK_REASONING_EFFORT", "medium",
 )
-DEEPSEEK_VALIDATION_REASONING_EFFORT = os.getenv(
+DEEPSEEK_VALIDATION_REASONING_EFFORT = env_reasoning(
     "DEEPSEEK_VALIDATION_REASONING_EFFORT", "medium",
 )
 DEEPSEEK_MAX_RETRIES = env_int("DEEPSEEK_MAX_RETRIES", 2)
@@ -102,5 +107,9 @@ DEEPSEEK_ANSWER_FALLBACK_MAX_TOKENS = env_int(
 DEEPSEEK_VALIDATION_MAX_TOKENS = env_int(
     "DEEPSEEK_VALIDATION_MAX_TOKENS", 8192,
 )
+DEEPSEEK_REPAIR_MAX_TOKENS = env_int("DEEPSEEK_REPAIR_MAX_TOKENS", 2048)
+GROUNDING_MODE = os.getenv("GROUNDING_MODE", "semantic").strip().casefold()
+if GROUNDING_MODE not in {"semantic", "strict"}:
+    GROUNDING_MODE = "semantic"
 SHORT_LECTURE_MAX_CHUNKS = env_int("SHORT_LECTURE_MAX_CHUNKS", 8)
 SHORT_LECTURE_MAX_CHARS = env_int("SHORT_LECTURE_MAX_CHARS", 32_000)

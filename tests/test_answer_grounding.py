@@ -3,6 +3,7 @@ import unittest
 
 from core.answer_grounding import (
     GROUNDING_FAILED_ANSWER,
+    answer_json_schema,
     apply_semantic_validation,
     build_semantic_review_plan,
     merge_semantic_review,
@@ -242,6 +243,58 @@ class GroundedAnswerValidationTests(unittest.TestCase):
         self.assertEqual(plan["review"]["claims"], [])
         self.assertEqual(plan["blocked_claims"], [])
 
+    def test_risk_gate_does_not_review_new_terms_without_other_risk(self):
+        sources = {
+            "T1": {
+                "text": (
+                    "Если объект отвечает за собственное корректное состояние, "
+                    "мы используем идею инкапсуляции."
+                ),
+                "source": {"filename": "lecture.mp3"},
+            },
+        }
+        grounded = validate_grounded_answer(
+            json.dumps({
+                "claims": [{
+                    "text": (
+                        "Инкапсуляция уместна, когда объект самостоятельно "
+                        "отвечает за собственное корректное состояние."
+                    ),
+                    "evidence": [{
+                        "source_id": "T1",
+                        "quote": sources["T1"]["text"],
+                    }],
+                }],
+            }, ensure_ascii=False),
+            sources,
+        )
+
+        plan = build_semantic_review_plan(grounded)
+
+        self.assertEqual(plan["safe_claim_ids"], ["C1"])
+        self.assertEqual(plan["review"]["claims"], [])
+        self.assertNotIn("C1", plan["risk_reasons"])
+
+    def test_grounded_answer_has_no_fixed_claim_count_limit(self):
+        payload = {
+            "claims": [
+                {
+                    "text": "Класс можно представить как описание нового типа объектов.",
+                    "evidence": [{
+                        "source_id": "T1",
+                        "quote": "Класс можно представить как описание нового типа объектов.",
+                    }],
+                }
+                for _ in range(12)
+            ],
+        }
+
+        grounded = self.validate(payload)
+
+        self.assertTrue(grounded["valid"])
+        self.assertEqual(len(grounded["claims"]), 12)
+        self.assertNotIn("maxItems", answer_json_schema()["properties"]["claims"])
+
     def test_risk_gate_accepts_known_asr_identifier_alias(self):
         sources = {
             "T1": {
@@ -349,6 +402,7 @@ class GroundedAnswerValidationTests(unittest.TestCase):
             [claim["claim_id"] for claim in plan["review"]["claims"]],
             ["C1"],
         )
+        self.assertIn("example_generalization", plan["risk_reasons"]["C1"])
         self.assertIn("several_new_terms", plan["risk_reasons"]["C1"])
 
     def test_risk_gate_blocks_new_number_without_llm(self):

@@ -83,7 +83,7 @@ class AnswerClaim(BaseModel):
 class GeneratedAnswer(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    claims: list[AnswerClaim] = Field(min_length=1, max_length=5)
+    claims: list[AnswerClaim] = Field(min_length=1)
 
 
 class ClaimVerdict(BaseModel):
@@ -112,7 +112,6 @@ def answer_json_schema() -> dict:
             "claims": {
                 "type": "array",
                 "minItems": 1,
-                "maxItems": 5,
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
@@ -486,6 +485,11 @@ def _claim_risk(
             reasons.append("qualifier_dropped")
             break
 
+    if _contains_marker(text, "например") and not _contains_marker(
+        evidence_text, "например"
+    ):
+        reasons.append("example_generalization")
+
     if len(claim["evidence"]) > 1:
         reasons.append("multiple_evidence_fragments")
 
@@ -496,10 +500,10 @@ def _claim_risk(
         if _term_is_covered(term, evidence_terms)
     }
     novel_terms = claim_terms - covered_terms
-    if len(novel_terms) >= 2:
-        reasons.append("several_new_terms")
     if claim_terms and len(covered_terms) / len(claim_terms) < 0.5:
         reasons.append("low_lexical_overlap")
+    if len(novel_terms) >= 2 and reasons:
+        reasons.append("several_new_terms")
 
     return ("review", reasons) if reasons else ("safe", [])
 

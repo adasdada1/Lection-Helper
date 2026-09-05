@@ -7,7 +7,13 @@ import json
 from core.embeddings import get_embedder
 from core.vector_store import search
 from core.lexical_store import list_chunks, search as lexical_search
-from core.llm import call_llm_for_answer, call_llm_for_validation
+from core.llm import (
+    call_llm_for_answer,
+    call_llm_for_semantic_answer,
+    call_llm_for_semantic_repair,
+    call_llm_for_semantic_validation,
+    call_llm_for_validation,
+)
 from core.model_runtime import LOCAL_MODEL_LOCK
 from core.technical_terms import relevant_term_guidance
 from core import chat_memory
@@ -22,9 +28,23 @@ from core.answer_grounding import (
     merge_semantic_review,
     validate_grounded_answer,
 )
+from core.semantic_grounding import (
+    apply_section_validation,
+    build_response_style,
+    build_question_requirements,
+    build_section_review_plan,
+    combine_semantic_results,
+    merge_section_review,
+    response_language_matches,
+    select_answer_reasoning,
+    semantic_answer_json_schema,
+    semantic_validation_json_schema,
+    validate_semantic_answer,
+)
 from core.config import (
     DENSE_TOP_K_SUMMARY,
     DENSE_TOP_K_TRANSCRIPT,
+    GROUNDING_MODE,
     LEXICAL_TOP_K_SUMMARY,
     LEXICAL_TOP_K_TRANSCRIPT,
     RERANK_TOP_N_SUMMARY,
@@ -84,8 +104,17 @@ async def ask(
             course_id=course_id,
             scope_doc_id=scope_doc_id,
         )
-    # 3. промпт с памятью чата
-    messages, evidence_sources = _build_messages(question, matches, chat_id)
+    requirements = (
+        build_question_requirements(question)
+        if GROUNDING_MODE == "semantic" else []
+    )
+    messages, evidence_sources = _build_messages(
+        question,
+        matches,
+        chat_id,
+        semantic_mode=GROUNDING_MODE == "semantic",
+        requirements=requirements,
+    )
 
     # 4. сохранить вопрос
     chat_memory.add_message(chat_id, "user", question)
@@ -94,55 +123,26 @@ async def ask(
     grounding_reason = None
     if evidence_sources:
         try:
-            result = call_llm_for_answer(messages, answer_json_schema())
-            deepseek_calls.extend(
-                _generation_usage_records(result, "answer_generation")
-            )
-            model = result.get("model")
-            grounded = _ground_generated_answer(
-                result["answer"], evidence_sources, question,
-            )
-            deepseek_calls.extend(grounded.get("deepseek_calls", []))
-            retried = False
-            if not grounded.get("valid") or not grounded.get("claims"):
-                logger.warning(
-                    "первая генерация не прошла проверку: %s",
-                    grounded.get("failure_reason"),
-                )
-                retry_result = call_llm_for_answer(
-                    _build_claim_retry_messages(
-                        question, evidence_sources, grounded,
-                    ),
-                    answer_json_schema(),
-                )
-                deepseek_calls.extend(
-                    _generation_usage_records(retry_result, "targeted_retry")
-                )
-                model = retry_result.get("model")
-                grounded = _ground_generated_answer(
-                    retry_result["answer"], evidence_sources, question,
-                )
-                deepseek_calls.extend(grounded.get("deepseek_calls", []))
-                retried = True
-
-            if grounded.get("valid") and grounded.get("claims"):
-                answer = grounded["answer"]
-                sources = _select_grounded_sources(
+            outcome = (
+                _generate_semantic_answer(
+                    messages,
                     evidence_sources,
-                    grounded["source_ids"],
-                    grounded["quotes"],
+                    question,
+                    requirements,
                 )
-                if retried:
-                    grounding_status = "supported_after_retry"
-                elif grounded.get("rejected_claims"):
-                    grounding_status = "supported_partial"
-                else:
-                    grounding_status = "supported"
-            else:
-                answer = GROUNDING_FAILED_ANSWER
-                sources = []
-                grounding_reason = grounded.get("failure_reason")
-                grounding_status = _failure_category(grounded)
+                if GROUNDING_MODE == "semantic"
+                else _generate_strict_answer(
+                    messages,
+                    evidence_sources,
+                    question,
+                )
+            )
+            answer = outcome["answer"]
+            sources = outcome["sources"]
+            model = outcome["model"]
+            grounding_status = outcome["grounding_status"]
+            grounding_reason = outcome["grounding_reason"]
+            deepseek_calls.extend(outcome["deepseek_calls"])
         except RuntimeError as exc:
             logger.error("генерация ответа недоступна: %s", exc)
             failure_result = getattr(exc, "result", None)
@@ -202,6 +202,258 @@ async def ask(
         "grounding_reason": grounding_reason,
         "deepseek_usage": _summarize_usage(deepseek_calls),
     }
+
+
+def _generate_strict_answer(
+    messages: list[dict],
+    evidence_sources: dict[str, dict],
+    question: str,
+) -> dict:
+    deepseek_calls = []
+    result = call_llm_for_answer(messages, answer_json_schema())
+    deepseek_calls.extend(
+        _generation_usage_records(result, "answer_generation")
+    )
+    model = result.get("model")
+    grounded = _ground_generated_answer(
+        result["answer"], evidence_sources, question,
+    )
+    deepseek_calls.extend(grounded.get("deepseek_calls", []))
+    retried = False
+    if not grounded.get("valid") or not grounded.get("claims"):
+        logger.warning(
+            "первая генерация не прошла проверку: %s",
+            grounded.get("failure_reason"),
+        )
+        retry_result = call_llm_for_answer(
+            _build_claim_retry_messages(
+                question, evidence_sources, grounded,
+            ),
+            answer_json_schema(),
+        )
+        deepseek_calls.extend(
+            _generation_usage_records(retry_result, "targeted_retry")
+        )
+        model = retry_result.get("model")
+        grounded = _ground_generated_answer(
+            retry_result["answer"], evidence_sources, question,
+        )
+        deepseek_calls.extend(grounded.get("deepseek_calls", []))
+        retried = True
+
+    if grounded.get("valid") and grounded.get("claims"):
+        status = "supported"
+        if retried:
+            status = "supported_after_retry"
+        elif grounded.get("rejected_claims"):
+            status = "supported_partial"
+        return {
+            "answer": grounded["answer"],
+            "sources": _select_grounded_sources(
+                evidence_sources,
+                grounded["source_ids"],
+                grounded["quotes"],
+            ),
+            "model": model,
+            "grounding_status": status,
+            "grounding_reason": None,
+            "deepseek_calls": deepseek_calls,
+        }
+
+    return {
+        "answer": GROUNDING_FAILED_ANSWER,
+        "sources": [],
+        "model": model,
+        "grounding_status": _failure_category(grounded),
+        "grounding_reason": grounded.get("failure_reason"),
+        "deepseek_calls": deepseek_calls,
+    }
+
+
+def _generate_semantic_answer(
+    messages: list[dict],
+    evidence_sources: dict[str, dict],
+    question: str,
+    requirements: list[dict],
+) -> dict:
+    deepseek_calls = []
+    result = call_llm_for_semantic_answer(
+        messages,
+        semantic_answer_json_schema(requirements),
+        select_answer_reasoning(requirements),
+    )
+    deepseek_calls.extend(
+        _generation_usage_records(result, "semantic_answer_generation")
+    )
+    model = result.get("model")
+    grounded = _ground_semantic_answer(
+        result["answer"], evidence_sources, question, requirements,
+    )
+    deepseek_calls.extend(grounded.get("deepseek_calls", []))
+
+    missing_ids = list(dict.fromkeys(
+        grounded.get("uncovered_requirement_ids", [])
+        + grounded.get("lost_requirement_ids", [])
+    ))
+    retried = False
+    if not grounded.get("valid"):
+        missing_ids = [item["requirement_id"] for item in requirements]
+    if missing_ids:
+        missing_requirements = [
+            item for item in requirements
+            if item["requirement_id"] in missing_ids
+        ]
+        try:
+            repair_result = call_llm_for_semantic_repair(
+                _build_semantic_repair_messages(
+                    messages,
+                    question,
+                    grounded.get("answer", ""),
+                    missing_requirements,
+                ),
+                semantic_answer_json_schema(missing_requirements),
+            )
+            deepseek_calls.append(
+                _usage_record(repair_result, "semantic_targeted_repair")
+            )
+            model = repair_result.get("model") or model
+            repaired = _ground_semantic_answer(
+                repair_result["answer"],
+                evidence_sources,
+                question,
+                missing_requirements,
+            )
+            deepseek_calls.extend(repaired.get("deepseek_calls", []))
+            if repaired.get("valid"):
+                grounded = combine_semantic_results(
+                    grounded,
+                    repaired,
+                    requirements,
+                )
+            retried = True
+        except RuntimeError as exc:
+            logger.error("не удалось дополнить пропущенные части: %s", exc)
+            failure_result = getattr(exc, "result", None)
+            if isinstance(failure_result, dict):
+                deepseek_calls.append(
+                    _usage_record(failure_result, "failed_semantic_repair")
+                )
+
+    if grounded.get("valid") and grounded.get("sections"):
+        missing_ids = grounded.get("uncovered_requirement_ids", [])
+        status = "supported"
+        if missing_ids:
+            status = "supported_partial"
+        elif retried:
+            status = "supported_after_retry"
+        elif grounded.get("rejected_sections"):
+            status = "supported_partial"
+        reason = (
+            "uncovered_requirements:" + ",".join(missing_ids)
+            if missing_ids else None
+        )
+        return {
+            "answer": grounded["answer"],
+            "sources": _select_semantic_sources(
+                evidence_sources,
+                grounded["source_ids"],
+            ),
+            "model": model,
+            "grounding_status": status,
+            "grounding_reason": reason,
+            "deepseek_calls": deepseek_calls,
+        }
+
+    return {
+        "answer": GROUNDING_FAILED_ANSWER,
+        "sources": [],
+        "model": model,
+        "grounding_status": "grounding_failure",
+        "grounding_reason": grounded.get("failure_reason"),
+        "deepseek_calls": deepseek_calls,
+    }
+
+
+def _ground_semantic_answer(
+    raw: str,
+    evidence_sources: dict[str, dict],
+    question: str,
+    requirements: list[dict],
+) -> dict:
+    deepseek_calls = []
+    grounded = validate_semantic_answer(raw, evidence_sources, requirements)
+    if not grounded.get("valid"):
+        grounded["deepseek_calls"] = deepseek_calls
+        return grounded
+
+    if not response_language_matches(question, grounded.get("sections", [])):
+        grounded["valid"] = False
+        grounded["failure_reason"] = "response_language_mismatch"
+        grounded["uncovered_requirement_ids"] = [
+            item["requirement_id"] for item in requirements
+        ]
+        grounded["deepseek_calls"] = deepseek_calls
+        return grounded
+
+    review_plan = build_section_review_plan(
+        grounded,
+        evidence_sources,
+        question,
+    )
+    logger.info(
+        "semantic grounding: %d безопасных, %d требуют llm, %d заблокированы",
+        len(review_plan["safe_section_ids"]),
+        len(review_plan["review_sections"]),
+        len(review_plan["blocked_sections"]),
+    )
+    if review_plan["risk_reasons"]:
+        logger.info("риски semantic-секций: %s", review_plan["risk_reasons"])
+
+    if review_plan["review_sections"]:
+        try:
+            validation_result = call_llm_for_semantic_validation(
+                _build_semantic_validation_messages(
+                    review_plan["review_sections"]
+                ),
+                semantic_validation_json_schema(),
+            )
+            deepseek_calls.extend(
+                _generation_usage_records(
+                    validation_result,
+                    "semantic_section_validation",
+                )
+            )
+            validation = apply_section_validation(
+                review_plan["review_sections"],
+                validation_result["answer"],
+            )
+        except RuntimeError as exc:
+            logger.error("semantic validator недоступен: %s", exc)
+            failure_result = getattr(exc, "result", None)
+            if isinstance(failure_result, dict):
+                deepseek_calls.append(
+                    _usage_record(failure_result, "failed_semantic_section_validation")
+                )
+            validation = apply_section_validation(
+                review_plan["review_sections"],
+                "",
+            )
+    else:
+        validation = {
+            "valid": True,
+            "accepted_section_ids": [],
+            "rejected_sections": [],
+            "failure_reason": None,
+        }
+
+    merged = merge_section_review(
+        grounded,
+        review_plan,
+        validation,
+        requirements,
+    )
+    merged["deepseek_calls"] = deepseek_calls
+    return merged
 
 
 def _load_short_scoped_transcript(doc_id: str) -> list[dict] | None:
@@ -497,6 +749,8 @@ def _build_messages(
     question: str,
     matches: list[dict],
     chat_id: str,
+    semantic_mode: bool = False,
+    requirements: list[dict] | None = None,
 ) -> tuple[list[dict], dict[str, dict]]:
     """собрать сообщения для llm."""
     evidence_sources = {}
@@ -511,9 +765,16 @@ def _build_messages(
         match for match in matches
         if match.get("metadata", {}).get("content_kind") == "summary"
     ]
+    normalized_context = "\n\n".join(
+        match["text"] for match in summary_matches
+    )
 
     # системный промпт
-    system_prompt = _load_prompt("answer_system_prompt.txt")
+    prompt_filename = (
+        "semantic_answer_system_prompt.txt"
+        if semantic_mode else "answer_system_prompt.txt"
+    )
+    system_prompt = _load_prompt(prompt_filename)
 
     messages: list[dict] = [
         {"role": "system", "content": system_prompt},
@@ -575,21 +836,26 @@ def _build_messages(
             }
             evidence_sources[source_id] = {
                 "text": match["text"],
+                "normalized_context": normalized_context,
                 "source": source,
             }
 
         for match in summary_matches:
             meta = match["metadata"]
+            summary_role = (
+                "нормализованный учебный материал"
+                if semantic_mode
+                else "нормализованный контекст, не источник доказательств"
+            )
             label = (
-                "Вспомогательный ИИ-конспект [нормализованный контекст, "
-                "не источник доказательств] "
+                f"Вспомогательный ИИ-конспект [{summary_role}] "
                 f"(из \"{meta.get('filename', 'материал')}\", "
                 f"чанк #{meta.get('chunk_index')})"
             )
             context_parts.append(f"--- {label} ---\n{match['text']}")
 
         context_block = "\n\n".join(context_parts)
-        guidance = _question_guidance(question)
+        guidance = "" if semantic_mode else _question_guidance(question)
         guidance_part = (
             f"\n\nТребование к структуре ответа:\n{guidance}"
             if guidance else ""
@@ -600,13 +866,33 @@ def _build_messages(
         term_guidance_part = (
             "\n\nТехнические алиасы распознавания речи:\n"
             f"{term_guidance}\n"
-            "В тексте тезиса используй канонический термин справа. "
-            "В поле quote копируй исходный транскрипт без исправлений."
+            + (
+                "Используй канонический термин справа."
+                if semantic_mode
+                else (
+                    "В тексте тезиса используй канонический термин справа. "
+                    "В поле quote копируй исходный транскрипт без исправлений."
+                )
+            )
             if term_guidance else ""
+        )
+        requirements_part = (
+            "\n\nОбязательные требования к покрытию вопроса:\n"
+            + json.dumps(requirements or [], ensure_ascii=False)
+            if semantic_mode else ""
+        )
+        response_style_part = (
+            "\n\nОбязательный профиль длины и плотности ответа:\n"
+            + json.dumps(
+                build_response_style(question, requirements or []),
+                ensure_ascii=False,
+            )
+            if semantic_mode else ""
         )
         user_content = (
             f"Контекст из лекций:\n\n{context_block}\n\n"
-            f"Вопрос студента: {question}{guidance_part}{term_guidance_part}"
+            f"Вопрос студента: {question}{requirements_part}"
+            f"{response_style_part}{guidance_part}{term_guidance_part}"
         )
     else:
         user_content = question
@@ -630,6 +916,59 @@ def _select_grounded_sources(
         source["text_preview"] = " … ".join(quotes.get(source_id, []))
         sources.append(source)
     return sources
+
+
+def _select_semantic_sources(
+    evidence_sources: dict[str, dict],
+    source_ids: list[str],
+) -> list[dict]:
+    sources = []
+    for source_id in source_ids:
+        evidence = evidence_sources.get(source_id)
+        if not evidence:
+            continue
+        source = dict(evidence["source"])
+        text = evidence["text"]
+        source["text_preview"] = text[:500] + "…" if len(text) > 500 else text
+        sources.append(source)
+    return sources
+
+
+def _build_semantic_validation_messages(sections: list[dict]) -> list[dict]:
+    return [
+        {
+            "role": "system",
+            "content": _load_prompt("semantic_validation_prompt.txt"),
+        },
+        {
+            "role": "user",
+            "content": json.dumps({"sections": sections}, ensure_ascii=False),
+        },
+    ]
+
+
+def _build_semantic_repair_messages(
+    original_messages: list[dict],
+    question: str,
+    existing_answer: str,
+    missing_requirements: list[dict],
+) -> list[dict]:
+    payload = {
+        "question": question,
+        "existing_answer": existing_answer,
+        "missing_requirements": missing_requirements,
+        "lecture_context": original_messages[-1].get("content", ""),
+    }
+    return [
+        {
+            "role": "system",
+            "content": _load_prompt("semantic_repair_prompt.txt"),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(payload, ensure_ascii=False),
+        },
+    ]
 
 
 def _build_claim_validation_messages(claims: list[dict]) -> list[dict]:

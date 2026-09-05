@@ -86,6 +86,81 @@ class ValidationLlmTests(unittest.TestCase):
             llm.DEEPSEEK_VALIDATION_REASONING_EFFORT,
         )
 
+    def test_semantic_answer_accepts_adaptive_low_reasoning(self):
+        with (
+            patch.object(deepseek_client, "DEEPSEEK_API_KEY", "test-key"),
+            patch.object(
+                deepseek_client.requests,
+                "post",
+                return_value=self.json_response(),
+            ) as post,
+        ):
+            llm.call_llm_for_semantic_answer(
+                [{"role": "user", "content": "{}"}],
+                self.schema,
+                "low",
+            )
+
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(payload["reasoning_effort"], "low")
+        self.assertIn(
+            "semantic_lecture_answer",
+            payload["messages"][0]["content"],
+        )
+
+    def test_semantic_repair_disables_thinking(self):
+        with (
+            patch.object(deepseek_client, "DEEPSEEK_API_KEY", "test-key"),
+            patch.object(
+                deepseek_client.requests,
+                "post",
+                return_value=self.json_response(),
+            ) as post,
+        ):
+            llm.call_llm_for_semantic_repair(
+                [{"role": "user", "content": "{}"}],
+                self.schema,
+            )
+
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(payload["thinking"], {"type": "disabled"})
+        self.assertNotIn("reasoning_effort", payload)
+        self.assertEqual(payload["max_tokens"], llm.DEEPSEEK_REPAIR_MAX_TOKENS)
+
+    def test_semantic_validator_falls_back_without_thinking_after_length(self):
+        with (
+            patch.object(deepseek_client, "DEEPSEEK_API_KEY", "test-key"),
+            patch.object(
+                deepseek_client.requests,
+                "post",
+                side_effect=[
+                    self.json_response(
+                        "",
+                        finish_reason="length",
+                        completion_tokens=8191,
+                    ),
+                    self.json_response('{"results": []}'),
+                ],
+            ) as post,
+        ):
+            result = llm.call_llm_for_semantic_validation(
+                [{"role": "user", "content": "{}"}],
+                self.schema,
+            )
+
+        fallback_payload = post.call_args_list[1].kwargs["json"]
+        self.assertEqual(fallback_payload["thinking"], {"type": "disabled"})
+        self.assertNotIn("reasoning_effort", fallback_payload)
+        self.assertEqual(
+            fallback_payload["max_tokens"],
+            llm.DEEPSEEK_REPAIR_MAX_TOKENS,
+        )
+        self.assertEqual(result["generation_mode"], "no_thinking_after_length")
+        self.assertEqual(
+            result["prior_results"][0]["usage"]["completion_tokens"],
+            8191,
+        )
+
     def test_answer_falls_back_without_thinking_after_length(self):
         with (
             patch.object(deepseek_client, "DEEPSEEK_API_KEY", "test-key"),
