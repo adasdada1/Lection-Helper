@@ -508,8 +508,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // менять высоту поля по тексту ====================================================================
     msgInput.addEventListener('input', () => {
+        msgInput.style.overflowY = 'hidden';
         msgInput.style.height = 'auto';
-        msgInput.style.height = msgInput.scrollHeight + 'px';
+        const style = getComputedStyle(msgInput);
+        const borderHeight = parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+        msgInput.style.height = Math.ceil(msgInput.scrollHeight + borderHeight) + 'px';
+        msgInput.style.overflowY = msgInput.scrollHeight > msgInput.clientHeight ? 'auto' : 'hidden';
         sendBtn.disabled = msgInput.value.trim().length === 0;
     });
 
@@ -530,7 +534,33 @@ document.addEventListener('DOMContentLoaded', () => {
         return d.innerHTML;
     };
 
-    const renderMarkdown = (text) => DOMPurify.sanitize(marked.parse(text ?? ""));
+    // Только стандартные Python-имена: обычное __выделение__ остаётся жирным.
+    const pythonDunderNames = new Set((
+        'str repr eq ne lt le gt ge hash init new del setitem getitem delitem ' +
+        'iter next len contains bool call getattr getattribute setattr delattr ' +
+        'enter exit aenter aexit await aiter anext format bytes int float complex ' +
+        'index round trunc floor ceil abs neg pos invert add sub mul matmul ' +
+        'truediv floordiv mod divmod pow lshift rshift and xor or radd rsub ' +
+        'rmul rmatmul rtruediv rfloordiv rmod rdivmod rpow rlshift rrshift rand ' +
+        'rxor ror iadd isub imul imatmul itruediv ifloordiv imod ipow ilshift ' +
+        'irshift iand ixor ior get set delete set_name init_subclass ' +
+        'class_getitem subclasscheck instancecheck reversed length_hint ' +
+        'copy deepcopy reduce reduce_ex getstate setstate getnewargs getnewargs_ex ' +
+        'name main class dict slots doc module qualname annotations all ' +
+        'mro bases match_args weakref'
+    ).split(' '));
+
+    const renderMarkdown = (text) => DOMPurify.sanitize(marked.parse(text ?? "", {
+        walkTokens(token) {
+            // Обходим Markdown-токены, не содержимое code-блоков или HTML-атрибутов.
+            const match = token.type === 'strong' && /^__([a-z][a-z0-9_]*)__$/u.exec(token.raw);
+            if (match && pythonDunderNames.has(match[1])) {
+                token.type = 'codespan';
+                token.text = token.raw;
+                delete token.tokens;
+            }
+        },
+    }));
 
 
     const formatKindLabel = (kind) => {

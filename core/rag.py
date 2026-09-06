@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import json
+from uuid import uuid4
 from core.embeddings import get_embedder
 from core.vector_store import search
 from core.lexical_store import list_chunks, search as lexical_search
@@ -17,6 +18,7 @@ from core.llm import (
 from core.model_runtime import LOCAL_MODEL_LOCK
 from core.technical_terms import relevant_term_guidance
 from core import chat_memory
+from core.semantic_diagnostics import record_semantic_diagnostic
 from core.answer_grounding import (
     GROUNDING_FAILED_ANSWER,
     INSUFFICIENT_ANSWER,
@@ -34,10 +36,13 @@ from core.semantic_grounding import (
     build_question_requirements,
     build_section_review_plan,
     combine_semantic_results,
+    commit_semantic_repair,
     merge_section_review,
+    requires_coverage_review,
     response_language_matches,
     select_answer_reasoning,
     semantic_answer_json_schema,
+    semantic_repair_json_schema,
     semantic_validation_json_schema,
     validate_semantic_answer,
 )
@@ -276,6 +281,7 @@ def _generate_semantic_answer(
     question: str,
     requirements: list[dict],
 ) -> dict:
+    trace_id = uuid4().hex
     deepseek_calls = []
     result = call_llm_for_semantic_answer(
         messages,
@@ -288,6 +294,7 @@ def _generate_semantic_answer(
     model = result.get("model")
     grounded = _ground_semantic_answer(
         result["answer"], evidence_sources, question, requirements,
+        trace_id=trace_id,
     )
     deepseek_calls.extend(grounded.get("deepseek_calls", []))
 
@@ -310,9 +317,13 @@ def _generate_semantic_answer(
                     question,
                     grounded.get("answer", "") if grounded.get("valid") else "",
                     missing_requirements,
-                    failure_reason=grounded.get("failure_reason"),
+                    failure_reason=grounded.get("failure_reason") or grounded.get("validator_failure"),
+                    accepted_sections=grounded.get("sections", []),
+                    coverage=grounded.get("coverage", []),
+                    rejected_sections=grounded.get("rejected_sections", []),
+                    requirements=requirements,
                 ),
-                semantic_answer_json_schema(missing_requirements),
+                semantic_repair_json_schema(requirements, grounded.get("sections", [])),
             )
             deepseek_calls.append(
                 _usage_record(repair_result, "semantic_targeted_repair")
@@ -322,15 +333,13 @@ def _generate_semantic_answer(
                 repair_result["answer"],
                 evidence_sources,
                 question,
-                missing_requirements,
+                requirements,
+                base=grounded,
+                trace_id=trace_id,
             )
             deepseek_calls.extend(repaired.get("deepseek_calls", []))
-            if repaired.get("valid"):
-                grounded = combine_semantic_results(
-                    grounded,
-                    repaired,
-                    requirements,
-                )
+            if repaired.get("valid") or not grounded.get("valid"):
+                grounded = repaired
             retried = True
         except RuntimeError as exc:
             logger.error("не удалось дополнить пропущенные части: %s", exc)
@@ -347,14 +356,25 @@ def _generate_semantic_answer(
             status = "supported_partial"
         elif retried:
             status = "supported_after_retry"
-        elif grounded.get("rejected_sections"):
+        elif grounded.get("rejected_sections") and not grounded.get("coverage_checked"):
             status = "supported_partial"
         reason = (
             "uncovered_requirements:" + ",".join(missing_ids)
             if missing_ids else None
         )
+        answer = grounded["answer"]
+        if missing_ids:
+            answer += (
+                "\n\nЧасть вопроса осталась неподтверждённой; "
+                "выше приведены только проверенные сведения."
+            )
+        record_semantic_diagnostic(
+            trace_id, question, "final", grounding_status=status,
+            sections=grounded["sections"], coverage=grounded.get("coverage", []),
+            usage=deepseek_calls,
+        )
         return {
-            "answer": grounded["answer"],
+            "answer": answer,
             "sources": _select_semantic_sources(
                 evidence_sources,
                 grounded["source_ids"],
@@ -365,6 +385,10 @@ def _generate_semantic_answer(
             "deepseek_calls": deepseek_calls,
         }
 
+    record_semantic_diagnostic(
+        trace_id, question, "final", grounding_status="grounding_failure",
+        failure_reason=grounded.get("failure_reason"), usage=deepseek_calls,
+    )
     return {
         "answer": GROUNDING_FAILED_ANSWER,
         "sources": [],
@@ -380,14 +404,37 @@ def _ground_semantic_answer(
     evidence_sources: dict[str, dict],
     question: str,
     requirements: list[dict],
+    base: dict | None = None,
+    trace_id: str | None = None,
 ) -> dict:
     deepseek_calls = []
-    grounded = validate_semantic_answer(raw, evidence_sources, requirements)
+    trace_id = trace_id or uuid4().hex
+    stage = "repair_review" if base is not None else "initial_review"
+    accepted = base.get("sections", []) if base and base.get("valid") else []
+    grounded = validate_semantic_answer(
+        raw, evidence_sources, requirements,
+        accepted_sections=accepted if base is not None else None,
+    )
     if not grounded.get("valid"):
+        record_semantic_diagnostic(
+            trace_id, question, stage, candidate_response=raw,
+            failure_reason=grounded.get("failure_reason"),
+        )
         grounded["deepseek_calls"] = deepseek_calls
         return grounded
 
+    if base is not None and not grounded["sections"]:
+        record_semantic_diagnostic(
+            trace_id, question, stage, candidate_response=raw,
+            failure_reason="no_repair_changes", coverage=base.get("coverage", []),
+        )
+        return {**base, "deepseek_calls": deepseek_calls}
+
     if not response_language_matches(question, grounded.get("sections", [])):
+        record_semantic_diagnostic(
+            trace_id, question, stage, candidate_response=raw,
+            failure_reason="response_language_mismatch",
+        )
         return {
             "valid": False,
             "answer": "",
@@ -401,11 +448,33 @@ def _ground_semantic_answer(
             "deepseek_calls": deepseek_calls,
         }
 
+    repair_patch = grounded if base is not None else None
+    if base is not None:
+        grounded = combine_semantic_results(base, grounded, requirements)
     review_plan = build_section_review_plan(
         grounded,
         evidence_sources,
         question,
     )
+    if base is not None:
+        # Existing sections are immutable approved input. Check all new text, not only
+        # lexically risky text, in the same call that audits coverage and duplicates.
+        trusted_ids = {section["section_id"] for section in accepted}
+        review_plan["blocked_sections"] = [
+            item for item in review_plan["blocked_sections"]
+            if item["section"]["section_id"] not in trusted_ids
+        ]
+        blocked_ids = {item["section"]["section_id"] for item in review_plan["blocked_sections"]}
+        review_plan["safe_section_ids"] = [
+            section["section_id"] for section in grounded["sections"]
+            if section["section_id"] in trusted_ids
+        ]
+        review_plan["review_sections"] = [
+            section for section in grounded["sections"]
+            if section["section_id"] not in trusted_ids | blocked_ids
+        ]
+    blocked_ids = {item["section"]["section_id"] for item in review_plan["blocked_sections"]}
+    available_sections = [s for s in grounded["sections"] if s["section_id"] not in blocked_ids]
     logger.info(
         "semantic grounding: %d безопасных, %d требуют llm, %d заблокированы",
         len(review_plan["safe_section_ids"]),
@@ -415,12 +484,23 @@ def _ground_semantic_answer(
     if review_plan["risk_reasons"]:
         logger.info("риски semantic-секций: %s", review_plan["risk_reasons"])
 
-    if review_plan["review_sections"]:
+    validation_payload = None
+    validation_raw = None
+    needs_review = bool(available_sections) and (
+        bool(review_plan["review_sections"])
+        or requires_coverage_review(question, requirements)
+        or base is not None
+    )
+    if needs_review:
+        validation_messages = _build_semantic_validation_messages(
+            review_plan["review_sections"], question, requirements,
+            available_sections, evidence_sources,
+        )
+        validation_payload = json.loads(validation_messages[-1]["content"])
+        allowed_source_ids = {item["source_id"] for item in validation_payload["transcripts"]}
         try:
             validation_result = call_llm_for_semantic_validation(
-                _build_semantic_validation_messages(
-                    review_plan["review_sections"]
-                ),
+                validation_messages,
                 semantic_validation_json_schema(),
             )
             deepseek_calls.extend(
@@ -429,9 +509,10 @@ def _ground_semantic_answer(
                     "semantic_section_validation",
                 )
             )
+            validation_raw = validation_result["answer"]
             validation = apply_section_validation(
-                review_plan["review_sections"],
-                validation_result["answer"],
+                review_plan["review_sections"], validation_raw,
+                requirements, available_sections, allowed_source_ids,
             )
         except RuntimeError as exc:
             logger.error("semantic validator недоступен: %s", exc)
@@ -441,9 +522,10 @@ def _ground_semantic_answer(
                     _usage_record(failure_result, "failed_semantic_section_validation")
                 )
             validation = apply_section_validation(
-                review_plan["review_sections"],
-                "",
+                review_plan["review_sections"], "",
+                requirements, available_sections, allowed_source_ids,
             )
+            validation["failure_reason"] = "semantic_validator_unavailable"
     else:
         validation = {
             "valid": True,
@@ -458,6 +540,18 @@ def _ground_semantic_answer(
         validation,
         requirements,
     )
+    record_semantic_diagnostic(
+        trace_id, question, stage,
+        candidate_response=raw,
+        validation_input=validation_payload,
+        validation_response=validation_raw,
+        risk_reasons=review_plan["risk_reasons"],
+        rejected_sections=merged.get("rejected_sections", []),
+        coverage=merged.get("coverage", []),
+        failure_reason=merged.get("failure_reason") or merged.get("validator_failure"),
+    )
+    if base is not None:
+        merged = commit_semantic_repair(base, repair_patch, merged, requirements)
     merged["deepseek_calls"] = deepseek_calls
     return merged
 
@@ -771,9 +865,9 @@ def _build_messages(
         match for match in matches
         if match.get("metadata", {}).get("content_kind") == "summary"
     ]
-    normalized_context = "\n\n".join(
-        match["text"] for match in summary_matches
-    )
+    summaries_by_doc = {}
+    for match in summary_matches:
+        summaries_by_doc.setdefault(match["metadata"].get("doc_id"), []).append(match["text"])
 
     # системный промпт
     prompt_filename = (
@@ -842,7 +936,7 @@ def _build_messages(
             }
             evidence_sources[source_id] = {
                 "text": match["text"],
-                "normalized_context": normalized_context,
+                "normalized_context": "\n\n".join(summaries_by_doc.get(meta.get("doc_id"), [])),
                 "source": source,
             }
 
@@ -942,7 +1036,81 @@ def _select_semantic_sources(
     return sources
 
 
-def _build_semantic_validation_messages(sections: list[dict]) -> list[dict]:
+def _build_semantic_validation_messages(
+    sections: list[dict],
+    question: str = "",
+    requirements: list[dict] | None = None,
+    all_sections: list[dict] | None = None,
+    evidence_sources: dict[str, dict] | None = None,
+) -> list[dict]:
+    all_sections = all_sections if all_sections is not None else sections
+    evidence_sources = evidence_sources or {
+        source["source_id"]: {"text": source["text"], "source": {}}
+        for section in sections for source in section.get("sources", [])
+    }
+    cited_ids = {
+        source_id for section in all_sections
+        for source_id in section.get("source_ids", [])
+    }
+    cited_ids.update(
+        source["source_id"] for section in sections for source in section.get("sources", [])
+    )
+    selected_ids = set(cited_ids)
+    total_chars = sum(len(source["text"]) for source in evidence_sources.values())
+    if len(evidence_sources) <= SHORT_LECTURE_MAX_CHUNKS and total_chars <= SHORT_LECTURE_MAX_CHARS:
+        # Reuse the generator's small evidence set, not a new retrieval/API call.
+        selected_ids = set(evidence_sources)
+    else:
+        used_chars = sum(len(evidence_sources[sid]["text"]) for sid in selected_ids)
+        for source_id, evidence in evidence_sources.items():
+            if source_id in selected_ids:
+                continue
+            meta = evidence.get("source", {})
+            if not meta.get("doc_id") or meta.get("chunk_index") is None:
+                continue
+            neighbor = any(
+                evidence_sources[sid].get("source", {}).get("doc_id") == meta["doc_id"]
+                and evidence_sources[sid].get("source", {}).get("chunk_index") is not None
+                and abs(int(evidence_sources[sid]["source"]["chunk_index"]) - int(meta["chunk_index"])) <= 1
+                for sid in cited_ids
+            )
+            if neighbor and used_chars + len(evidence["text"]) <= SHORT_LECTURE_MAX_CHARS:
+                selected_ids.add(source_id)
+                used_chars += len(evidence["text"])
+    transcripts = [{
+        "source_id": source_id,
+        "doc_id": evidence.get("source", {}).get("doc_id"),
+        "chunk_index": evidence.get("source", {}).get("chunk_index"),
+        "text": evidence["text"],
+    } for source_id, evidence in evidence_sources.items() if source_id in selected_ids]
+    auxiliary = []
+    seen_summaries = set()
+    summary_budget = 8000
+    for source_id, evidence in evidence_sources.items():
+        text = evidence.get("normalized_context", "")
+        if source_id not in selected_ids or not text or text in seen_summaries or summary_budget <= 0:
+            continue
+        seen_summaries.add(text)
+        excerpt = text[:min(2000, summary_budget)]
+        auxiliary.append({
+            "doc_id": evidence.get("source", {}).get("doc_id"),
+            "text": excerpt, "truncated": len(excerpt) < len(text),
+        })
+        summary_budget -= len(excerpt)
+    payload = {
+        "question": question,
+        "requirements": requirements or [],
+        "review_section_ids": [section["section_id"] for section in sections],
+        "sections": [{
+            key: value for key, value in section.items() if key != "sources"
+        } for section in all_sections],
+        "transcripts": transcripts,
+        "includes_all_generation_sources": selected_ids == set(evidence_sources),
+        "auxiliary_summaries": auxiliary,
+        "asr_aliases": relevant_term_guidance(
+            question + "\n" + "\n".join(source["text"] for source in transcripts)
+        ),
+    }
     return [
         {
             "role": "system",
@@ -950,7 +1118,7 @@ def _build_semantic_validation_messages(sections: list[dict]) -> list[dict]:
         },
         {
             "role": "user",
-            "content": json.dumps({"sections": sections}, ensure_ascii=False),
+            "content": json.dumps(payload, ensure_ascii=False),
         },
     ]
 
@@ -961,10 +1129,24 @@ def _build_semantic_repair_messages(
     existing_answer: str,
     missing_requirements: list[dict],
     failure_reason: str | None = None,
+    accepted_sections: list[dict] | None = None,
+    coverage: list[dict] | None = None,
+    rejected_sections: list[dict] | None = None,
+    requirements: list[dict] | None = None,
 ) -> list[dict]:
+    rejection_feedback = [{
+        "section": {key: value for key, value in item.get("section", {}).items() if key != "sources"},
+        "verdict": item.get("verdict"),
+        "reasons": item.get("reasons", []),
+        "reason": item.get("reason"),
+    } for item in rejected_sections or []]
     payload = {
         "question": question,
         "existing_answer": existing_answer,
+        "accepted_sections": accepted_sections or [],
+        "coverage_review": coverage or [],
+        "rejection_feedback": rejection_feedback,
+        "requirements": requirements or missing_requirements,
         "missing_requirements": missing_requirements,
         "repair_mode": "missing_parts" if existing_answer else "complete_answer",
         "failure_reason": failure_reason,

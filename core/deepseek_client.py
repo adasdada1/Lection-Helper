@@ -53,6 +53,27 @@ def call_deepseek_structured(
     )
 
 
+def call_deepseek_text(
+    messages: list[dict],
+    max_tokens: int,
+    operation: str,
+    thinking_enabled: bool = False,
+    reasoning_effort: str = "low",
+) -> dict:
+    """Обычный текст без JSON-обёртки; повторы и учёт расхода общие с проверкой."""
+    if not DEEPSEEK_API_KEY:
+        raise RuntimeError("DEEPSEEK_API_KEY не настроен в .env")
+    payload = _base_payload(messages, max_tokens, reasoning_effort, thinking_enabled)
+    data = _post_with_retries(DEEPSEEK_API_URL, payload, operation)
+    choice = _first_choice(data, operation)
+    content = (choice.get("message") or {}).get("content") or ""
+    if not content.strip():
+        raise DeepSeekCompletionError(
+            f"{operation}: DeepSeek вернул пустой текст", _result(data, ""),
+        )
+    return _result(data, content)
+
+
 def get_usage_totals() -> dict:
     with _usage_lock:
         return dict(_usage_totals)
