@@ -72,6 +72,11 @@ class SemanticValidation(BaseModel):
 def build_question_requirements(question: str) -> list[dict]:
     normalized = " ".join(question.casefold().replace("ё", "е").split())
     descriptions = []
+    asks_why = bool(re.search(r"\bпочему\b|\bпо какой причине\b", normalized))
+    asks_mechanism = bool(re.search(
+        r"\bкак\b[^.!?;]*\b(?:работ\w*|устро\w*|выполня\w*|происход\w*|запрещ\w*)\b",
+        normalized,
+    ))
 
     if (
         re.search(r"\bперечисл\w*\b", normalized)
@@ -87,13 +92,34 @@ def build_question_requirements(question: str) -> list[dict]:
         or "за что" in normalized
         or re.search(r"\bсущност\w*\b", normalized)
         or re.search(r"\bознача\w*\b", normalized)
+        or (
+            re.search(r"\b(?:объясн\w*|объясня\w*|поясн\w*)\b", normalized)
+            and not (asks_why or asks_mechanism)
+        )
     ):
-        descriptions.append("Объяснить сущность или назначение запрошенных понятий.")
+        descriptions.append(
+            "Объяснить сущность или назначение каждого запрошенного понятия. "
+            "Если требуется объяснить каждый элемент перечня, одних названий недостаточно."
+        )
+
+    if asks_why:
+        descriptions.append(
+            "Объяснить причину: показать связь между условием и результатом, "
+            "а не только назвать термин. Сохранить существенные оговорки."
+        )
+    if asks_mechanism:
+        descriptions.append(
+            "Объяснить механизм или последовательность действий из вопроса "
+            "и результат этих действий."
+        )
 
     if re.search(r"\bкогда\b", normalized) or re.search(
         r"\bпримен\w*\b", normalized
     ):
-        descriptions.append("Объяснить, когда применяется каждый запрошенный вариант.")
+        descriptions.append(
+            "Объяснить, когда применяется каждый запрошенный вариант отдельно. "
+            "В сравнении раскрыть применение обеих сторон, а не только одной."
+        )
 
     if re.search(r"\bзачем\b", normalized) or re.search(r"\bдля чего\b", normalized):
         descriptions.append("Объяснить практическую цель или пользу.")
@@ -105,7 +131,11 @@ def build_question_requirements(question: str) -> list[dict]:
     ):
         descriptions.append("Прямо показать различия между запрошенными понятиями.")
 
-    if re.search(r"\bпример\w*\b", normalized):
+    if re.search(
+        r"\b(?:привед\w*|покаж\w*|дай|дайте|добав\w*)\b[^.!?;]*\bпример\w*\b"
+        r"|\bна примере\b|\bс\s+(?:(?:коротк\w*|прост\w*|одним)\s+)?пример\w*\b",
+        normalized,
+    ):
         descriptions.append("Привести пример из предоставленного материала.")
 
     if not descriptions:
@@ -135,8 +165,8 @@ def response_language_matches(question: str, sections: list[dict]) -> bool:
 
 
 def build_response_style(question: str, requirements: list[dict]) -> dict:
+    """Задать глубину объяснения без нормы, которую нужно добирать словами."""
     normalized = " ".join(question.casefold().replace("ё", "е").split())
-    requirement_count = max(1, len(requirements))
     brief = re.search(
         r"\b(?:кратк\w*|коротк\w*|сжато|лаконичн\w*|покороче)\b",
         normalized,
@@ -146,34 +176,48 @@ def build_response_style(question: str, requirements: list[dict]) -> dict:
         normalized,
     )
 
-    if brief:
-        return {
-            "mode": "brief",
-            "target_words": min(240, max(100, requirement_count * 50)),
-            "upper_word_budget": min(320, max(150, requirement_count * 70)),
-            "examples": "Не добавлять примеры без необходимости; максимум один короткий пример.",
-            "structure": (
-                "Плотно покрыть требования без вводного абзаца и без повторного "
-                "итогового пересказа. Один компактный пункт может покрывать несколько требований."
-            ),
-        }
-
-    if detailed:
-        return {
-            "mode": "detailed",
-            "target_words": min(700, max(350, requirement_count * 130)),
-            "upper_word_budget": min(950, max(550, requirement_count * 180)),
-            "examples": "Добавлять только примеры, которые заметно улучшают понимание.",
-            "structure": "Раскрыть требования последовательно, избегая повторов между разделами.",
-        }
-
-    return {
-        "mode": "standard",
-        "target_words": min(260, max(120, requirement_count * 80)),
-        "upper_word_budget": min(380, max(220, requirement_count * 110)),
-        "examples": "Использовать не более одного короткого примера, если он нужен для понимания.",
-        "structure": "Сразу отвечать по существу и не повторять вывод отдельным пересказом.",
+    style = {
+        "mode": "brief" if brief else "detailed" if detailed else "standard",
+        "stop_when": (
+            "Дан прямой ответ, раскрыты запрошенные части, необходимое объяснение "
+            "и существенные оговорки. Не добирай слова и не повторяй итог."
+        ),
+        "coverage": (
+            "Сохрани все требования и раскрой запрошенные аспекты для каждого объекта."
+            if len(requirements) > 1 else
+            "Объём определяет смысл вопроса, а не количество найденных фрагментов."
+        ),
     }
+    if brief:
+        style.update({
+            "examples": "Пример нужен, если он запрошен или без него непонятен ответ.",
+            "structure": (
+                "Сократи формулировки, но не причины, шаги и запрошенные элементы. "
+                "Без вступления и повторного итога."
+            ),
+        })
+    elif detailed:
+        style.update({
+            "examples": "Разбери полезные примеры из материала, не повторяющие друг друга.",
+            "structure": (
+                "Последовательно раскрой причины, шаги и условия по теме вопроса. "
+                "Каждый абзац должен добавлять объяснение, а не пересказывать предыдущий."
+            ),
+        })
+    else:
+        style.update({
+            "examples": (
+                "Для абстрактного понятия используй короткий поясняющий пример, "
+                "если он нужен; не добавляй пример к простому названию факта. "
+                "Если запрошены несколько примеров, приведи их."
+            ),
+            "structure": (
+                "Прямой ответ, затем необходимое пояснение. Для факта достаточно "
+                "названия с полезным уточнением; для почему/как нужно объяснение, "
+                "для сравнения или перечня - все запрошенные стороны."
+            ),
+        })
+    return style
 
 
 def semantic_answer_json_schema(requirements: list[dict]) -> dict:
@@ -440,7 +484,9 @@ def combine_semantic_results(
     requirements: list[dict],
 ) -> dict:
     sections = []
-    for section in base.get("sections", []) + repair.get("sections", []):
+    base_sections = base.get("sections", []) if base.get("valid") else []
+    repair_sections = repair.get("sections", []) if repair.get("valid") else []
+    for section in base_sections + repair_sections:
         item = dict(section)
         item["section_id"] = f"S{len(sections) + 1}"
         sections.append(item)

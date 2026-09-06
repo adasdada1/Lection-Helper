@@ -308,8 +308,9 @@ def _generate_semantic_answer(
                 _build_semantic_repair_messages(
                     messages,
                     question,
-                    grounded.get("answer", ""),
+                    grounded.get("answer", "") if grounded.get("valid") else "",
                     missing_requirements,
+                    failure_reason=grounded.get("failure_reason"),
                 ),
                 semantic_answer_json_schema(missing_requirements),
             )
@@ -387,13 +388,18 @@ def _ground_semantic_answer(
         return grounded
 
     if not response_language_matches(question, grounded.get("sections", [])):
-        grounded["valid"] = False
-        grounded["failure_reason"] = "response_language_mismatch"
-        grounded["uncovered_requirement_ids"] = [
-            item["requirement_id"] for item in requirements
-        ]
-        grounded["deepseek_calls"] = deepseek_calls
-        return grounded
+        return {
+            "valid": False,
+            "answer": "",
+            "sections": [],
+            "coverage": [],
+            "source_ids": [],
+            "failure_reason": "response_language_mismatch",
+            "uncovered_requirement_ids": [
+                item["requirement_id"] for item in requirements
+            ],
+            "deepseek_calls": deepseek_calls,
+        }
 
     review_plan = build_section_review_plan(
         grounded,
@@ -867,7 +873,9 @@ def _build_messages(
             "\n\nТехнические алиасы распознавания речи:\n"
             f"{term_guidance}\n"
             + (
-                "Используй канонический термин справа."
+                "Используй канонический термин справа. Это служебные алиасы: "
+                "не перечисляй ошибки распознавания в учебном ответе. "
+                "Если восстановление неоднозначно и меняет смысл, укажи неопределённость."
                 if semantic_mode
                 else (
                     "В тексте тезиса используй канонический термин справа. "
@@ -882,7 +890,7 @@ def _build_messages(
             if semantic_mode else ""
         )
         response_style_part = (
-            "\n\nОбязательный профиль длины и плотности ответа:\n"
+            "\n\nПрофиль объяснения response_style (без заданного числа слов):\n"
             + json.dumps(
                 build_response_style(question, requirements or []),
                 ensure_ascii=False,
@@ -952,11 +960,14 @@ def _build_semantic_repair_messages(
     question: str,
     existing_answer: str,
     missing_requirements: list[dict],
+    failure_reason: str | None = None,
 ) -> list[dict]:
     payload = {
         "question": question,
         "existing_answer": existing_answer,
         "missing_requirements": missing_requirements,
+        "repair_mode": "missing_parts" if existing_answer else "complete_answer",
+        "failure_reason": failure_reason,
         "lecture_context": original_messages[-1].get("content", ""),
     }
     return [

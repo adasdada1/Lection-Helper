@@ -6,6 +6,7 @@ from core.semantic_grounding import (
     build_question_requirements,
     build_response_style,
     build_section_review_plan,
+    combine_semantic_results,
     merge_section_review,
     response_language_matches,
     select_answer_reasoning,
@@ -56,7 +57,7 @@ class SemanticGroundingTests(unittest.TestCase):
             [{"text": "Метод send() имеет разные реализации у разных типов."}],
         ))
 
-    def test_brief_style_keeps_composite_coverage_with_small_budget(self):
+    def test_brief_style_keeps_composite_coverage_without_word_quota(self):
         question = (
             "Сравни все четыре принципа: для каждого кратко объясни, "
             "за что он отвечает, когда применяется и чем отличается."
@@ -67,10 +68,12 @@ class SemanticGroundingTests(unittest.TestCase):
 
         self.assertEqual(style["mode"], "brief")
         self.assertEqual(len(requirements), 4)
-        self.assertEqual(style["target_words"], 200)
-        self.assertEqual(style["upper_word_budget"], 280)
+        self.assertNotIn("target_words", style)
+        self.assertNotIn("upper_word_budget", style)
+        self.assertIn("не причины, шаги", style["structure"])
+        self.assertIn("каждого объекта", style["coverage"])
 
-    def test_standard_style_is_shorter_than_detailed_style(self):
+    def test_style_changes_explanation_depth_not_word_targets(self):
         standard_question = (
             "Чем метод класса отличается от статического метода "
             "и когда использовать каждый?"
@@ -87,10 +90,86 @@ class SemanticGroundingTests(unittest.TestCase):
 
         self.assertEqual(standard["mode"], "standard")
         self.assertEqual(detailed["mode"], "detailed")
-        self.assertLess(
-            standard["upper_word_budget"],
-            detailed["upper_word_budget"],
+        for style in (standard, detailed):
+            self.assertNotIn("target_words", style)
+            self.assertNotIn("upper_word_budget", style)
+            self.assertIn("stop_when", style)
+        self.assertIn("Прямой ответ", standard["structure"])
+        self.assertIn("причины, шаги и условия", detailed["structure"])
+
+    def test_name_question_has_no_extra_example_or_length_requirement(self):
+        question = "От какого типа наследуется словарь в примере?"
+        requirements = build_question_requirements(question)
+        style = build_response_style(question, requirements)
+
+        self.assertEqual(len(requirements), 1)
+        self.assertNotIn("Привести пример", requirements[0]["description"])
+        self.assertNotIn("target_words", style)
+        self.assertIn("полезным уточнением", style["structure"])
+
+    def test_explain_each_is_separate_from_naming_items(self):
+        names = build_question_requirements("Перечисли четыре принципа ООП.")
+        explained = build_question_requirements(
+            "Перечисли четыре принципа ООП и объясни каждый."
         )
+
+        self.assertEqual(len(names), 1)
+        self.assertEqual(len(explained), 2)
+        self.assertIn("каждого запрошенного понятия", explained[1]["description"])
+        self.assertIn("одних названий недостаточно", explained[1]["description"])
+
+    def test_why_and_how_require_explanation_even_when_brief(self):
+        cases = [
+            ("Кратко: почему super() не просто вызов родителя?", "причину"),
+            ("Кратко: как словарь запрещает перезапись?", "последовательность"),
+        ]
+        for question, expected in cases:
+            with self.subTest(question=question):
+                requirements = build_question_requirements(question)
+                self.assertIn(expected, requirements[0]["description"])
+                self.assertEqual(build_response_style(question, requirements)["mode"], "brief")
+
+    def test_comparison_with_usage_covers_both_sides(self):
+        requirements = build_question_requirements(
+            "Сравни наследование и композицию: чем отличаются и когда использовать?"
+        )
+        descriptions = " ".join(item["description"] for item in requirements)
+
+        self.assertEqual(len(requirements), 2)
+        self.assertIn("обеих сторон", descriptions)
+        self.assertIn("различия", descriptions)
+
+    def test_explicit_examples_are_not_lost(self):
+        for question in (
+            "Объясни полиморфизм с примером.",
+            "Приведи два примера полиморфизма.",
+            "Поясни наследование на примере.",
+        ):
+            with self.subTest(question=question):
+                descriptions = " ".join(
+                    item["description"] for item in build_question_requirements(question)
+                )
+                self.assertIn("Привести пример", descriptions)
+
+    def test_merge_never_reintroduces_sections_from_invalid_result(self):
+        requirements = build_question_requirements("Что такое метод класса?")
+        english = {
+            "section_id": "S1", "text": "A class method receives the class.",
+            "source_ids": ["T2"], "basis": "source", "covers": ["R1"],
+        }
+        russian = {
+            "section_id": "S1", "text": "Метод класса работает с самим классом.",
+            "source_ids": ["T1"], "basis": "source", "covers": ["R1"],
+        }
+        for base, repair in (
+            ({"valid": False, "sections": [english]}, {"valid": True, "sections": [russian]}),
+            ({"valid": True, "sections": [russian]}, {"valid": False, "sections": [english]}),
+        ):
+            with self.subTest(base_valid=base["valid"]):
+                merged = combine_semantic_results(base, repair, requirements)
+                self.assertEqual(merged["answer"], russian["text"])
+                self.assertEqual(merged["source_ids"], ["T1"])
+                self.assertEqual(len(merged["sections"]), 1)
 
     def test_natural_paraphrase_needs_no_exact_quote(self):
         requirements = build_question_requirements("Что такое метод класса?")

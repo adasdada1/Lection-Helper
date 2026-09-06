@@ -8,6 +8,10 @@ import core.rag as rag
 
 class SemanticAnswerFlowTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch(
+            "requests.sessions.Session.request",
+            side_effect=AssertionError("Network requests are forbidden in unit tests"),
+        ))
         self.chat = {
             "chat_id": "chat-1",
             "course_id": "course-1",
@@ -86,7 +90,11 @@ class SemanticAnswerFlowTests(unittest.TestCase):
         self.assertIn("ИИ-конспект нормализует", messages[-1]["content"])
         self.assertIn("Транскрипт подробно", messages[-1]["content"])
         self.assertIn('"mode": "standard"', messages[-1]["content"])
-        self.assertIn('"upper_word_budget": 220', messages[-1]["content"])
+        self.assertIn('"stop_when"', messages[-1]["content"])
+        self.assertNotIn('"target_words"', messages[-1]["content"])
+        self.assertNotIn('"upper_word_budget"', messages[-1]["content"])
+        self.assertIn("ПРИМЕРЫ ПЛОТНОСТИ", messages[0]["content"])
+        self.assertIn("без перечисления служебных алиасов", messages[0]["content"])
         self.assertNotIn("В поле quote", messages[-1]["content"])
         self.assertEqual(list(evidence), ["T1"])
         self.assertIn(
@@ -303,6 +311,65 @@ class SemanticAnswerFlowTests(unittest.TestCase):
         self.assertEqual(repair_call.call_count, 1)
         missing_payload = repair_call.call_args.args[0][1]["content"]
         self.assertIn('"requirement_id": "R2"', missing_payload)
+        self.assertEqual(json.loads(missing_payload)["repair_mode"], "missing_parts")
+        self.assertEqual(
+            json.loads(missing_payload)["existing_answer"],
+            "Метод класса получает ссылку на сам класс.",
+        )
+        validator_call.assert_not_called()
+
+    def language_response(self, english=False):
+        text = (
+            "A class method receives the class and provides an alternative constructor."
+            if english else
+            "Метод класса получает ссылку на сам класс. "
+            "Его используют как альтернативный конструктор."
+        )
+        return self.response(
+            [{
+                "section_id": "S1", "text": text, "source_ids": ["T1"],
+                "basis": "source", "covers": ["R1", "R2"],
+            }],
+            [{
+                "requirement_id": requirement_id, "status": "covered",
+                "section_ids": ["S1"], "reason": "",
+            } for requirement_id in ("R1", "R2")],
+        )
+
+    def test_invalid_answer_is_replaced_not_appended_after_repair(self):
+        malformed = dict(self.language_response())
+        malformed["answer"] = "not json"
+        for generated, reason in (
+            (self.language_response(english=True), "response_language_mismatch"),
+            (malformed, "invalid_model_response"),
+        ):
+            with self.subTest(reason=reason):
+                result, answer_call, validator_call, repair_call = self.run_ask(
+                    generated, self.language_response(),
+                )
+                payload = json.loads(repair_call.call_args.args[0][1]["content"])
+                self.assertEqual(payload["existing_answer"], "")
+                self.assertEqual(payload["repair_mode"], "complete_answer")
+                self.assertEqual(payload["failure_reason"], reason)
+                self.assertEqual(len(payload["missing_requirements"]), 2)
+                self.assertEqual(result["grounding_status"], "supported_after_retry")
+                self.assertNotIn("A class method", result["answer"])
+                self.assertIn("альтернативный конструктор", result["answer"])
+                self.assertEqual(result["answer"].count("Метод класса"), 1)
+                answer_call.assert_called_once()
+                repair_call.assert_called_once()
+                validator_call.assert_not_called()
+
+    def test_second_wrong_language_answer_fails_closed(self):
+        generated = self.language_response(english=True)
+        result, answer_call, validator_call, repair_call = self.run_ask(generated, generated)
+
+        self.assertEqual(result["grounding_status"], "grounding_failure")
+        self.assertEqual(result["grounding_reason"], "response_language_mismatch")
+        self.assertEqual(result["sources"], [])
+        self.assertNotIn("A class method", result["answer"])
+        answer_call.assert_called_once()
+        repair_call.assert_called_once()
         validator_call.assert_not_called()
 
 
